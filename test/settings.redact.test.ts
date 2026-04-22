@@ -79,7 +79,7 @@ describe("restless() — redact merge from settings + opts", () => {
         response: { status: 200, headers: {} },
         duration: 1,
       });
-      await new Promise((r) => setTimeout(r, 0));
+      await client.flush();
       const entry = sent[0].request.log.entries[0];
       const h = entry.request.headers.find(
         (x: any) => x.name === "x-company-auth",
@@ -114,6 +114,7 @@ describe("restless() — redact merge from settings + opts", () => {
         redact: { headers: ["x-from-opts"] },
         fetch: fetchImpl as unknown as typeof fetch,
       });
+      // Force flush because default baseUrl is HTTPS prod, not localhost
       client.engine.record({
         requestId: "r1",
         startedAt: new Date().toISOString(),
@@ -130,7 +131,7 @@ describe("restless() — redact merge from settings + opts", () => {
         response: { status: 200, headers: {} },
         duration: 1,
       });
-      await new Promise((r) => setTimeout(r, 0));
+      await client.flush();
       const entry = sent[0].request.log.entries[0];
       const byName = (n: string) =>
         entry.request.headers.find((h: any) => h.name === n).value;

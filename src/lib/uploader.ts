@@ -1,7 +1,7 @@
 import type { CapturedRequest } from "../types.js";
 import { toHarEntry } from "./har.js";
 
-const DEFAULT_BASE_URL = "http://localhost:3003";
+const DEFAULT_BASE_URL = "https://ingress.restless.ai";
 const BATCH_SIZE = 10;
 const FLUSH_INTERVAL_MS = 5000;
 /** Hard cap on the in-memory queue — prevents OOM during a metrics outage. */
@@ -24,6 +24,50 @@ function debugEnabled(): boolean {
 
 export function resolveBaseUrl(explicit?: string): string {
   return explicit || process.env.RESTLESS_BASE_URL || DEFAULT_BASE_URL;
+}
+
+/**
+ * Detect whether we're running inside a test harness. Uploads are disabled
+ * in this mode by default so tests don't hammer real infrastructure.
+ *
+ * Covers the major runners. Mocha and Playwright don't set anything we
+ * can key on — users in those environments should set `NODE_ENV=test`
+ * themselves (which is already the recommended practice for both).
+ */
+function isTestRun(): boolean {
+  if (process.env.NODE_ENV === "test") return true;
+  if (process.env.VITEST === "true") return true;
+  if (process.env.JEST_WORKER_ID !== undefined) return true;
+  if (process.env.NODE_TEST_CONTEXT !== undefined) return true;
+  if (process.env.AVA_PATH !== undefined) return true;
+  return false;
+}
+
+function isLocalhostUrl(baseUrl: string): boolean {
+  try {
+    const url = new URL(baseUrl);
+    return url.hostname === "localhost" || url.hostname === "127.0.0.1";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Decide whether to flush every push immediately or batch.
+ *
+ * Instant flush when:
+ *   - `NODE_ENV !== 'production'` — customer developer loop, low volume
+ *   - localhost baseUrl — self-hosted or SDK dev workflow
+ *
+ * Otherwise batch normally (10 per upload or 5s timer, whichever first).
+ * `RESTLESS_SETUP_MODE` only gates the test-runner no-op in push(); it
+ * does NOT force instant flush by itself (though during `npx api setup`
+ * NODE_ENV is typically unset, which already triggers instant flush).
+ */
+function shouldFlushImmediately(baseUrl: string): boolean {
+  if (process.env.NODE_ENV !== "production") return true;
+  if (isLocalhostUrl(baseUrl)) return true;
+  return false;
 }
 
 /**
@@ -78,16 +122,14 @@ export class Uploader {
     return { baseUrl: this.baseUrl, requestIdPrefix: this.prefix };
   }
 
-  private isLocalhost(): boolean {
-    try {
-      const url = new URL(this.baseUrl);
-      return url.hostname === "localhost" || url.hostname === "127.0.0.1";
-    } catch {
-      return false;
-    }
-  }
-
   push(captured: CapturedRequest) {
+    // Test runners: drop silently. Tests shouldn't hammer ingress. The
+    // explicit `RESTLESS_SETUP_MODE=1` override re-enables uploads (the
+    // CLI's test-curl step uses this).
+    if (isTestRun() && process.env.RESTLESS_SETUP_MODE !== "1") {
+      return;
+    }
+
     // Cap the queue so a metrics-server outage doesn't grow unbounded memory.
     // Drop oldest rather than newest — the newest entries are probably the
     // ones the operator is still actively debugging.
@@ -100,8 +142,10 @@ export class Uploader {
     }
     this.queue.push(captured);
 
-    // Dev ergonomics — on localhost, flush immediately so logs show up instantly.
-    if (this.isLocalhost() || this.queue.length >= BATCH_SIZE) {
+    if (
+      shouldFlushImmediately(this.baseUrl) ||
+      this.queue.length >= BATCH_SIZE
+    ) {
       void this.flush();
     } else if (!this.timer) {
       this.timer = setTimeout(() => void this.flush(), FLUSH_INTERVAL_MS);

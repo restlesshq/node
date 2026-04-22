@@ -13,20 +13,29 @@ function mkCaptured(id: string): CapturedRequest {
 }
 
 describe("Uploader", () => {
-  it("flushes when the queue reaches 10", async () => {
-    const fetchImpl = vi
-      .fn()
-      .mockResolvedValue({ ok: true, text: async () => "" });
-    const up = new Uploader({
-      apiKey: "test-key",
-      baseUrl: "https://remote.example",
-      fetchImpl: fetchImpl as unknown as typeof fetch,
-    });
-    for (let i = 0; i < 9; i++) up.push(mkCaptured(`a-${i}`));
-    expect(fetchImpl).not.toHaveBeenCalled();
-    up.push(mkCaptured("final"));
-    await new Promise((r) => setTimeout(r, 0));
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  it("flushes when the queue reaches 10 (prod-mode batching)", async () => {
+    // Simulate production env: NODE_ENV=production for real batching.
+    // Keep SETUP_MODE=1 so uploads aren't no-op'd by the test-runner gate.
+    const origEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = "production";
+    try {
+      const fetchImpl = vi
+        .fn()
+        .mockResolvedValue({ ok: true, text: async () => "" });
+      const up = new Uploader({
+        apiKey: "test-key",
+        baseUrl: "https://remote.example",
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      });
+      for (let i = 0; i < 9; i++) up.push(mkCaptured(`a-${i}`));
+      expect(fetchImpl).not.toHaveBeenCalled();
+      up.push(mkCaptured("final"));
+      await new Promise((r) => setTimeout(r, 0));
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    } finally {
+      if (origEnv === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = origEnv;
+    }
   });
 
   it("flushes immediately on localhost", async () => {
@@ -179,6 +188,47 @@ describe("Uploader", () => {
     });
     expect(spy).not.toHaveBeenCalled();
     spy.mockRestore();
+  });
+
+  it("is a no-op when a test runner is detected (without SETUP_MODE)", async () => {
+    // Global test-setup sets RESTLESS_SETUP_MODE=1 to re-enable uploads for
+    // our suite. Unset it here to exercise the no-op path.
+    const origSetup = process.env.RESTLESS_SETUP_MODE;
+    delete process.env.RESTLESS_SETUP_MODE;
+    try {
+      const fetchImpl = vi.fn();
+      const up = new Uploader({
+        apiKey: "k",
+        baseUrl: "http://localhost:3003",
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      });
+      for (let i = 0; i < 50; i++) up.push(mkCaptured(`a-${i}`));
+      await new Promise((r) => setTimeout(r, 0));
+      expect(fetchImpl).not.toHaveBeenCalled();
+      // Queue itself is untouched — push() returned early before queueing
+      expect(
+        (up as unknown as { queue: unknown[] }).queue.length,
+      ).toBe(0);
+    } finally {
+      if (origSetup === undefined) delete process.env.RESTLESS_SETUP_MODE;
+      else process.env.RESTLESS_SETUP_MODE = origSetup;
+    }
+  });
+
+  it("RESTLESS_SETUP_MODE=1 forces upload even in test mode", async () => {
+    // The global setup already sets SETUP_MODE=1 for the whole suite,
+    // so this just verifies the expected effect.
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue({ ok: true, text: async () => "" });
+    const up = new Uploader({
+      apiKey: "k",
+      baseUrl: "https://remote.example",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    up.push(mkCaptured("a"));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it("swallows fetch errors", async () => {
