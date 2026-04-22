@@ -147,8 +147,7 @@ export function expressMiddleware(handle: SetupHandle) {
         duration,
         user: {
           apiKey: setup.apiKey,
-          projectId: setup.projectId,
-          project: setup._enriched?.project,
+          project: setup.project,
         },
       });
 

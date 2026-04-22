@@ -18,22 +18,25 @@ describe("restless() factory + setup()", () => {
     expect(m).toMatch(/^sha512-[A-Za-z0-9+/=]+\?abcd$/);
   });
 
-  it("setup() stores the callback and returns a handle", () => {
+  it("setup() stores the callback and returns a polymorphic function with handle props", () => {
     const client = restless("rdme_test");
     const cb = vi.fn().mockReturnValue({
       apiKey: "masked",
-      projectId: "acme",
+      project: { id: "acme" },
     });
-    const handle = client.setup(cb);
-    expect(handle.__restless).toBe(client);
-    expect(handle.__cb).toBe(cb);
+    const mw = client.setup(cb);
+    // setup() returns a function now, with handle props attached
+    expect(typeof mw).toBe("function");
+    expect((mw as any).__restless).toBe(client);
+    expect((mw as any).__cb).toBe(cb);
   });
 
   it("engine.resolve() calls the setup callback", async () => {
     const client = restless("rdme_test");
-    const cb = vi
-      .fn()
-      .mockResolvedValue({ apiKey: "masked", projectId: "acme" });
+    const cb = vi.fn().mockResolvedValue({
+      apiKey: "masked",
+      project: { id: "acme", label: "Acme" },
+    });
     client.setup(cb);
     const result = await client.engine.resolve({
       method: "POST",
@@ -46,7 +49,7 @@ describe("restless() factory + setup()", () => {
       headers: { authorization: "Bearer t" },
     });
     expect(result.apiKey).toBe("masked");
-    expect(result.projectId).toBe("acme");
+    expect(result.project).toEqual({ id: "acme", label: "Acme" });
   });
 
   it("swallows setup-callback errors", async () => {

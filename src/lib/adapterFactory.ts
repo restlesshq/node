@@ -44,7 +44,13 @@ export function makeAdapterClient<M>(
     mask: client.mask,
     flush: () => client.flush(),
     setup(cb) {
-      const handle = client.setup(cb);
+      // client.setup() now returns a polymorphic function with handle props
+      // attached. For the explicit subpath adapters we only care about the
+      // handle shape, so cast through.
+      const handle = client.setup(cb) as unknown as {
+        __restless: RestlessClient;
+        __cb: SetupCallback;
+      };
       return buildMiddleware(handle);
     },
   };

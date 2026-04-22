@@ -125,8 +125,7 @@ export async function restlessFastifyPlugin(fastify: any, handle: SetupHandle) {
       duration,
       user: {
         apiKey: state.setup.apiKey,
-        projectId: state.setup.projectId,
-        project: state.setup._enriched?.project,
+        project: state.setup.project,
       },
     });
 

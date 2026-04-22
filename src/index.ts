@@ -6,7 +6,7 @@ import type {
   UserContext,
   HarEntry,
   ProjectDetails,
-  UserEnrichment,
+  ProjectSetup,
 } from "./types.js";
 import { CaptureEngine } from "./lib/capture.js";
 import { mask } from "./lib/mask.js";
@@ -17,6 +17,7 @@ import {
 } from "./lib/requestId.js";
 import { loadSettings, resolveApi } from "./lib/settings.js";
 import { resolveBaseUrl } from "./lib/uploader.js";
+import { universalMiddleware } from "./lib/universal.js";
 
 export type {
   ClientOptions,
@@ -26,13 +27,18 @@ export type {
   UserContext,
   HarEntry,
   ProjectDetails,
-  UserEnrichment,
+  ProjectSetup,
 };
 
 /** Client returned by `restless(apiKey, opts?)`. */
 export interface RestlessClient {
-  /** Register a per-request callback. Pass the return value to a framework adapter. */
-  setup(cb: SetupCallback): { __restless: RestlessClient; __cb: SetupCallback };
+  /**
+   * Register a per-request callback and get back a polymorphic middleware
+   * that auto-detects the framework it's called from (Express, Koa, Hono,
+   * Fastify, Next.js, or bare Node http). No framework-specific import
+   * needed for the common frameworks.
+   */
+  setup(cb: SetupCallback): ReturnType<typeof universalMiddleware>;
 
   /**
    * Hash an end-user API key into the shared `sha512-<base64>?<last4>` format.
@@ -111,7 +117,19 @@ function restless(apiKey?: string, opts: ClientOptions = {}): RestlessClient {
     flush: () => engine.flush(),
     setup(cb) {
       engine.setCallback(cb);
-      return { __restless: client, __cb: cb };
+      const handle = { __restless: client, __cb: cb };
+      const mw = universalMiddleware(handle) as ReturnType<
+        typeof universalMiddleware
+      > & { __restless: RestlessClient; __cb: SetupCallback };
+      // The per-framework subpath factories (@restlessai/sdk/express, etc.)
+      // expect `setup(cb)` to return a SetupHandle. Attach the handle props
+      // directly on the function so both patterns work:
+      //   app.use(restless.setup(cb))                    ← universal middleware
+      //   require('@restlessai/sdk/express')(k).setup(cb) ← still opts into the
+      //   explicit adapter via the handle props.
+      mw.__restless = client;
+      mw.__cb = cb;
+      return mw;
     },
   };
 

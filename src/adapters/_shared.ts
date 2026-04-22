@@ -9,9 +9,11 @@ export interface SetupHandle {
 }
 
 export function isSetupHandle(x: unknown): x is SetupHandle {
+  // Accept both plain objects and functions (the universal middleware returned
+  // from `client.setup()` is a function with handle props attached).
   return (
     !!x &&
-    typeof x === "object" &&
+    (typeof x === "object" || typeof x === "function") &&
     "__restless" in (x as object) &&
     "__cb" in (x as object)
   );

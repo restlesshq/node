@@ -1,12 +1,9 @@
 import type {
   CapturedRequest,
+  ProjectDetails,
   SetupCallback,
   SetupResult,
-  UserEnrichment,
 } from "../types.js";
-
-/** Shape returned by `engine.resolve()` — setup result + optional enrichment payload. */
-export type ResolvedSetup = SetupResult & { _enriched?: UserEnrichment };
 import { Uploader, type UploaderConfig } from "./uploader.js";
 import { Blocklist } from "./blocklist.js";
 import { EnrichCache } from "./enrichCache.js";
@@ -24,11 +21,14 @@ export interface EngineConfig extends Omit<UploaderConfig, "onResponse"> {
   redact?: RedactOptions;
 }
 
-/**
- * Shared capture engine. Resolves setup callbacks (including lazy enrichment
- * keyed by projectId), applies redaction + truncation, and hands the result
- * to the uploader.
- */
+/** Shape `engine.resolve()` returns — the setup result with project merged + enriched. */
+export interface ResolvedSetup {
+  apiKey?: string;
+  project?: ProjectDetails & { id?: string };
+  block?: SetupResult["block"];
+  [key: string]: unknown;
+}
+
 export class CaptureEngine {
   readonly uploader: Uploader;
   readonly blocklist: Blocklist;
@@ -51,9 +51,8 @@ export class CaptureEngine {
   }
 
   /**
-   * Called after every successful upload with the server's parsed response.
-   * Handles `needsEnrichment: string[]` — project IDs (or apiKeys when no
-   * project) the server wants re-enriched on the next request.
+   * Server can respond with `{ needsEnrichment: [<projectId>...] }` to force
+   * re-running `enrich` on the next request from that project.
    */
   private handleServerResponse(body: unknown): void {
     if (!body || typeof body !== "object") return;
@@ -78,29 +77,38 @@ export class CaptureEngine {
       return {};
     }
 
-    const { enrich, ...rest } = result;
+    const { project: rawProject, ...rest } = result;
+    if (!rawProject) {
+      // No project → just apiKey + anything else
+      return rest as ResolvedSetup;
+    }
 
-    // Group identifier for caching — prefer projectId (coarse), fall back to
-    // apiKey (fine-grained). That way multiple end-users from one project
-    // share a cache slot.
-    const cacheKey = rest.projectId || rest.apiKey;
+    const { enrich, ...inlineProject } = rawProject;
+    const cacheKey = rawProject.id || rest.apiKey;
 
-    if (typeof enrich === "function" && cacheKey && !this.enrichCache.isFresh(cacheKey)) {
+    // Run enrich lazily if we have a key to cache under and it's stale
+    if (
+      typeof enrich === "function" &&
+      rawProject.id &&
+      cacheKey &&
+      !this.enrichCache.isFresh(cacheKey)
+    ) {
       try {
-        const enriched = await enrich();
+        const enriched = await enrich(rawProject.id);
         this.enrichCache.markFresh(cacheKey);
-        return { ...rest, _enriched: enriched };
+        return {
+          ...rest,
+          project: { ...inlineProject, ...enriched },
+        } as ResolvedSetup;
       } catch {
         // Enrichment failure must not break the request path.
       }
     }
 
-    return rest;
+    return { ...rest, project: inlineProject } as ResolvedSetup;
   }
 
-  /**
-   * Redact + truncate, then enqueue.
-   */
+  /** Redact + truncate, then enqueue. */
   record(captured: CapturedRequest) {
     const sanitized: CapturedRequest = {
       ...captured,

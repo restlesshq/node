@@ -1,22 +1,41 @@
 /**
- * Project metadata that the `enrich` callback fills in. Sent on the first
- * request from each project (or after server-driven invalidation), cached
- * in-memory for subsequent requests.
+ * Fully-resolved project data that goes on the wire. Inline fields from the
+ * user's `setup` callback plus anything their `project.enrich(id)` returned,
+ * merged together.
  */
 export interface ProjectDetails {
   /** Human-readable display label for the dashboard. */
   label?: string;
-  /** Contact email(s) associated with this project. A single string or an array of strings. */
+  /** Contact email(s) associated with this project. A single string or an array. */
   email?: string | string[];
   [key: string]: unknown;
 }
 
 /**
- * What `enrich()` returns. Currently a `project` block is the only
- * standard field; any additional fields are preserved on the log as-is.
+ * What the user puts under `project:` in their setup callback.
+ *
+ * `id` is the cheap, stable identifier (sent every request, used as the
+ * caching key). `label`, `email`, etc. are optional cheap inline fields.
+ * `enrich(id)` is an optional async resolver for expensive lookups; it's
+ * only called on the first request from each project id, then cached.
  */
-export interface UserEnrichment {
-  project?: ProjectDetails;
+export interface ProjectSetup {
+  /** Stable identifier for the project/customer. Cached under this. */
+  id?: string;
+
+  /** Cheap inline fields. Included on every request. */
+  label?: string;
+  email?: string | string[];
+
+  /**
+   * Lazy resolver for expensive project metadata (DB lookup, JWT verification,
+   * external HTTP call). Receives the project id as an argument. Runs only
+   * on the first request from each id (or after server-driven invalidation),
+   * then cached. Return any additional fields to merge into the project.
+   */
+  enrich?: (id: string) => ProjectDetails | Promise<ProjectDetails>;
+
+  /** Any extra fields are preserved on the log. */
   [key: string]: unknown;
 }
 
@@ -24,40 +43,30 @@ export interface UserEnrichment {
 export interface UserContext {
   /** Masked end-user API key. */
   apiKey?: string;
-  /** Stable project / customer identifier. Grouping key on the dashboard. */
-  projectId?: string;
-  /** Enriched project metadata (from enrich). */
-  project?: ProjectDetails;
+  /** Resolved project: `id` plus cheap inline fields plus anything `enrich` returned. */
+  project?: ProjectDetails & { id?: string };
   [key: string]: unknown;
 }
 
 /**
  * What the user returns from `setup(cb)` on every request.
  *
- * The top-level fields (apiKey, projectId) are CHEAP and sent every request.
- * Anything expensive (DB lookups, JWT verification) goes inside `enrich()` —
- * the SDK only calls it when the server doesn't already have the data cached.
+ * Keep top-level fields CHEAP (straight from the request — header, cookie,
+ * JWT claim). Put anything expensive inside `project.enrich(id)`; the SDK
+ * calls it lazily and dedups by project id.
  */
 export interface SetupResult {
   /** Mask end-user API key with `restless.mask(...)`. Never pass plaintext. */
   apiKey?: string;
 
   /**
-   * Stable identifier for the project / customer / org this user belongs to.
-   * Used as the primary grouping dimension on the dashboard — one project
-   * can contain many end-users, each with their own `apiKey`.
+   * The project / customer / org this user belongs to. `project.id` is the
+   * grouping dimension on the dashboard. Optional for single-tenant apps.
    */
-  projectId?: string;
+  project?: ProjectSetup;
 
   /** Reject this request with a 4xx before the handler runs. */
   block?: boolean | { status?: number; message?: string };
-
-  /**
-   * Expensive user / project lookup. Only runs when the SDK has no cached
-   * record that the server already knows this project. The server can force
-   * a refresh by responding with `needsEnrichment: [projectId]`.
-   */
-  enrich?: () => UserEnrichment | Promise<UserEnrichment>;
 
   /** Any additional fields are stored on the log as-is. */
   [key: string]: unknown;

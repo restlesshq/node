@@ -40,13 +40,18 @@ The client exposes four things:
 | `flush()`        | Force-upload the current batch (e.g. before `process.exit`).    |
 | `client`         | Underlying low-level client (advanced use).                     |
 
+The import is the same for every framework — `@restlessai/sdk` auto-detects the framework at runtime from the call signature. Only the registration pattern differs.
+
+```js
+const restless = require('@restlessai/sdk')(process.env.RESTLESS_KEY);
+```
+
 ### Express
 
 ```js
-const restless = require('@restlessai/sdk/express')(process.env.RESTLESS_KEY);
 app.use(restless.setup((req) => ({
-  apiKey:    restless.mask(req.headers.authorization),
-  projectId: req.headers['x-tenant-id'],
+  apiKey: restless.mask(req.headers.authorization),
+  project: { id: req.headers['x-tenant-id'] },
 })));
 ```
 
@@ -55,28 +60,27 @@ app.use(restless.setup((req) => ({
 ### Fastify
 
 ```js
-const restless = require('@restlessai/sdk/fastify')(process.env.RESTLESS_KEY);
 await fastify.register(restless.setup((req) => ({
   apiKey: restless.mask(req.headers.authorization),
+  project: { id: req.headers['x-tenant-id'] },
 })));
 ```
 
 ### Koa
 
 ```js
-const restless = require('@restlessai/sdk/koa')(process.env.RESTLESS_KEY);
 app.use(restless.setup((ctx) => ({
   apiKey: restless.mask(ctx.request.headers.authorization),
+  project: { id: ctx.request.headers['x-tenant-id'] },
 })));
 ```
 
 ### Hono
 
 ```js
-import honoFactory from '@restlessai/sdk/hono';
-const restless = honoFactory(process.env.RESTLESS_KEY);
 app.use(restless.setup((c) => ({
   apiKey: restless.mask(c.req.header('authorization')),
+  project: { id: c.req.header('x-tenant-id') },
 })));
 ```
 
@@ -84,13 +88,14 @@ app.use(restless.setup((c) => ({
 
 ```ts
 // app/lib/restless.ts
-import next from '@restlessai/sdk/next';
-export const restless = next(process.env.RESTLESS_KEY!);
+import restless from '@restlessai/sdk';
+export const client = restless(process.env.RESTLESS_KEY!);
 
 // app/api/hello/route.ts
-import { restless } from '../../lib/restless';
-const wrap = restless.setup((req) => ({
-  apiKey: restless.mask(req.headers.get('authorization')),
+import { client } from '../../lib/restless';
+const wrap = client.setup((req) => ({
+  apiKey: client.mask(req.headers.get('authorization')),
+  project: { id: req.headers.get('x-tenant-id') },
 }));
 export const GET  = wrap(async () => Response.json({ ok: true }));
 export const POST = wrap(async () => Response.json({ ok: true }));
@@ -99,7 +104,6 @@ export const POST = wrap(async () => Response.json({ ok: true }));
 ### Bare Node http / Bun.serve
 
 ```js
-const restless = require('@restlessai/sdk/http')(process.env.RESTLESS_KEY);
 http.createServer(restless.setup((req) => ({
   apiKey: restless.mask(req.headers.authorization),
 }))((req, res) => {
@@ -119,63 +123,70 @@ Signature (all frameworks normalize to this shape):
 
 `SetupResult` fields:
 
-| field        | type                                        | required | notes                                                                          |
-|--------------|---------------------------------------------|----------|--------------------------------------------------------------------------------|
-| `apiKey`     | `string \| undefined`                       | no       | Masked key from `restless.mask()`. Never pass plaintext.                       |
-| `projectId`  | `string`                                    | no       | Stable identifier for the project / customer / org this user belongs to. Primary grouping dimension on the dashboard. |
-| `block`      | `true \| { status?, message? }`             | no       | Rejects the request with 403 (or custom status). Handler never runs.           |
-| `enrich`     | `() => UserEnrichment \| Promise<...>`      | no       | Expensive project lookup. Only runs when the server needs fresh data.          |
+| field      | type                                         | required | notes                                                                     |
+|------------|----------------------------------------------|----------|---------------------------------------------------------------------------|
+| `apiKey`   | `string \| undefined`                        | no       | Masked key from `restless.mask()`. Never pass plaintext.                  |
+| `project`  | `ProjectSetup`                               | no       | Project / customer / org this user belongs to. See below.                 |
+| `block`    | `true \| { status?, message? }`              | no       | Rejects the request with 403 (or custom status). Handler never runs.      |
 
 Extra top-level fields are preserved and stored on the log.
 
+### The `project` block
+
+Everything related to the customer/org this user belongs to lives here. The SDK treats it as one unit: cheap fields are sent every request; `enrich` runs only on first-seen per id.
+
+```ts
+interface ProjectSetup {
+  id?:     string;                // cheap, required when using enrich
+  label?:  string;                // cheap inline
+  email?:  string | string[];     // cheap inline
+  enrich?: (id: string) => ProjectDetails | Promise<ProjectDetails>;  // lazy
+  [key: string]: unknown;
+}
+
+interface ProjectDetails {
+  label?: string;
+  email?: string | string[];
+  [key: string]: unknown;
+}
+```
+
 ### What's cheap vs expensive
 
-Top-level fields (`apiKey`, `projectId`) are **cheap**: they come straight from the request (header, cookie, JWT claim). The SDK sends them on every request so the dashboard always has something to group by.
+Top-level `apiKey` and all inline fields under `project` (id, label, email, whatever extras you add) are **cheap** — included on every request.
 
-Expensive lookups (display label, contact emails, plan tier, anything requiring a DB or external call) go inside `enrich`. The SDK only calls `enrich` on the first request from a given project, then caches until the server asks for a refresh.
+`project.enrich(id)` is **expensive** — the SDK calls it only on the first request from each `project.id`, then caches until the server asks for a refresh.
 
 ### Lazy project enrichment
 
 ```js
 restless.setup((req) => ({
-  apiKey:    restless.mask(req.headers.authorization),
-  projectId: req.headers['x-tenant-id'],
+  apiKey: restless.mask(req.headers.authorization),
 
-  // Only runs when the server hasn't confirmed it has this project yet.
-  enrich: async () => {
-    const org = await db.orgs.findById(req.headers['x-tenant-id']);
-    return {
-      project: {
+  project: {
+    id: req.headers['x-tenant-id'],
+
+    // Only runs when the server hasn't confirmed it has this project yet.
+    // Receives the id as an argument (has access to req via closure too).
+    enrich: async (id) => {
+      const org = await db.orgs.findById(id);
+      return {
         label: org.name,
-        email: org.contactEmail,       // single string
-        // or: email: org.contactEmails  // array of strings — both work
-        // any extra fields are preserved
-        plan:  org.plan,
-      },
-    };
+        email: org.contactEmail,      // single string OR string[]
+        plan:  org.plan,              // any extra fields are preserved
+      };
+    },
   },
 }));
 ```
 
-`UserEnrichment` shape:
-
-```ts
-interface UserEnrichment {
-  project?: {
-    label?: string;                    // display name
-    email?: string | string[];         // one contact email or several
-    [key: string]: unknown;
-  };
-  [key: string]: unknown;
-}
-```
-
 Behavior:
 
-- Cached by `projectId` (or `apiKey` as a fallback when no `projectId` is set). First request from each project triggers `enrich`; subsequent requests skip it.
-- If the server responds to an upload with `needsEnrichment: [<projectId>]`, that project is invalidated and the next request from it re-runs `enrich`.
-- `enrich` errors are swallowed. The log still ships (just without the extra fields).
-- `enrich` has access to `req` via closure. Do NOT pass `req` as an argument.
+- Cached by `project.id`. First request from each project triggers `enrich`; subsequent requests skip it.
+- If the server responds to an upload with `needsEnrichment: [<project.id>]`, that project is invalidated and the next request from it re-runs `enrich`.
+- `enrich` errors are swallowed. The log still ships with the inline fields.
+- `enrich` runs only when `project.id` is set (there's nothing to cache under otherwise).
+- Inline fields (`label`, `email` outside `enrich`) are sent on every request, so they survive cache hits even if `enrich` never fires.
 
 ## 5. The `mask()` gotcha
 

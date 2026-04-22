@@ -140,19 +140,19 @@ export class Uploader {
       return {
         _id: captured.requestId,
         routePattern: captured.routePattern,
-        // The primary grouping key. projectId if provided (so multiple
+        // Primary grouping key: project.id if provided (so multiple
         // end-users within one project aggregate together), falling back
         // to the individual apiKey.
         group: {
-          id: user.projectId || user.apiKey || "anonymous",
+          id: project?.id || user.apiKey || "anonymous",
           label: project?.label || "",
           emails,
         },
-        // Individual end-user fingerprint (separate from the grouping key).
+        // Individual end-user fingerprint, separate from the grouping key.
         apiKey: user.apiKey,
-        // Project ID carried separately so the server can index on it
+        // Project id carried separately so the server can index on it
         // independent of the group slot.
-        projectId: user.projectId,
+        projectId: project?.id,
         clientIPAddress: "127.0.0.1",
         development: false,
         request: {

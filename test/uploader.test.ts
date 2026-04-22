@@ -55,7 +55,7 @@ describe("Uploader", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it("emits apiKey + projectId + enriched project in the payload", async () => {
+  it("emits apiKey + project (with id) in the payload", async () => {
     let sentBody: string | undefined;
     const fetchImpl = vi.fn().mockImplementation(async (_url, init: any) => {
       sentBody = init.body;
@@ -69,8 +69,11 @@ describe("Uploader", () => {
     const cap = mkCaptured("id-123");
     cap.user = {
       apiKey: "sha512-xxx?1234",
-      projectId: "acme-org-id",
-      project: { label: "Acme Inc", email: ["ops@acme.com", "ceo@acme.com"] },
+      project: {
+        id: "acme-org-id",
+        label: "Acme Inc",
+        email: ["ops@acme.com", "ceo@acme.com"],
+      },
     };
     up.push(cap);
     await new Promise((r) => setTimeout(r, 0));
@@ -97,7 +100,7 @@ describe("Uploader", () => {
     const cap = mkCaptured("id-solo");
     cap.user = {
       apiKey: "sha512-xxx?1234",
-      project: { label: "Solo", email: "owner@solo.dev" },
+      project: { id: "solo-id", label: "Solo", email: "owner@solo.dev" },
     };
     up.push(cap);
     await new Promise((r) => setTimeout(r, 0));
@@ -121,6 +124,7 @@ describe("Uploader", () => {
     up.push(cap);
     await new Promise((r) => setTimeout(r, 0));
     const parsed = JSON.parse(sentBody!);
+    // With no project, the grouping key falls back to the masked apiKey
     expect(parsed[0].group.id).toBe("sha512-xxx?1234");
     expect(parsed[0].projectId).toBeUndefined();
   });

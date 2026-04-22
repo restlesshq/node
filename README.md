@@ -21,15 +21,34 @@ npm install @restlessai/sdk
 ```
 
 ```js
-// Express / Koa / Hono — middleware pattern
-const restless = require('@restlessai/sdk/express')(process.env.RESTLESS_KEY);
+const restless = require('@restlessai/sdk')(process.env.RESTLESS_KEY);
 
 app.use(restless.setup((req) => ({
+  // Identifies the end-user (cheap, every request).
   apiKey: restless.mask(req.headers.authorization),
+
+  // The customer / tenant / org this user belongs to.
+  // Optional for single-tenant apps, recommended for multi-tenant SaaS.
+  project: {
+    // Required: stable id, used as the grouping dimension on the dashboard.
+    id: req.headers['x-tenant-id'],
+
+    // Optional: lazy resolver for expensive project metadata (DB lookup,
+    // JWT verification, etc.). Runs once per id on first-seen and on
+    // server-requested invalidation, then cached. 100 requests from the
+    // same project don't hit your DB 100 times.
+    enrich: async (id) => {
+      const org = await db.orgs.findById(id);
+      return {
+        label: org.name,            // display name on the dashboard
+        email: org.contactEmail,    // string or string[]
+      };
+    },
+  },
 })));
 ```
 
-**Other frameworks** follow the same `restless.setup(cb)` pattern but register differently:
+**No framework subpath needed.** `require('@restlessai/sdk')` auto-detects the framework at runtime from the call signature. The setup pattern is identical; only registration differs:
 
 | framework | registration                                                          |
 |-----------|-----------------------------------------------------------------------|
@@ -40,12 +59,12 @@ app.use(restless.setup((req) => ({
 | Next.js   | `export const GET = restless.setup(cb)(async (req) => { ... })`       |
 | http      | `http.createServer(restless.setup(cb)(myHandler))`                    |
 
-Full per-framework examples and the `enrich` callback (for DB-backed user info) are in [`install.md`](./install.md).
+Full per-framework examples are in [`install.md`](./install.md).
 
 ## What you get
 
 - **One line of setup.** The factory returns a client; `setup(cb)` gives you framework-ready middleware back.
-- **Lazy user enrichment.** Expensive DB lookups for user metadata run only on the first request from each user, then cache until the server requests a refresh. 100 requests from the same user don't hit your database 100 times.
+- **Lazy project enrichment.** Expensive DB lookups for project metadata (display name, contact emails, plan tier) run only on the first request from each project, then cache until the server asks for a refresh. 100 requests from the same project don't hit your database 100 times.
 - **Safe by default.** Headers like `Authorization` / `Cookie` and body fields like `password` / `token` / `ssn` are redacted before anything leaves your server. The redaction list extends itself from your OpenAPI spec: the `npx api setup` flow scans your auth mechanisms and flags custom fields automatically.
 - **Error-triage built in.** 4xx / 5xx responses get an `x-log-url` header and a `debug` block in the JSON body so you can jump straight to the captured log.
 - **Blocking.** Return `{ block: true }` from the setup callback to reject a request with a 403 before your handler runs.
