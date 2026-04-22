@@ -1,6 +1,6 @@
 # @restlesshq/node
 
-Capture your API traffic and send it to Restless.
+Capture your API traffic and send it to [Restless](https://restless.ai).
 
 Supports **Express**, **Fastify**, **Koa**, **Hono**, **Next.js**, and bare Node `http`. Runs on Node 18+, Bun, and Deno.
 
