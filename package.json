@@ -1,0 +1,92 @@
+{
+  "name": "@restlesshq/node",
+  "version": "0.2.0",
+  "description": "Capture API traffic and send it to Restless. Works with Express, Fastify, Koa, Hono, Next.js, and the bare Node http server. Runs on Node, Bun, and Deno.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./express": {
+      "types": "./dist/adapters/express.d.ts",
+      "import": "./dist/adapters/express.js",
+      "require": "./dist/adapters/express.cjs"
+    },
+    "./fastify": {
+      "types": "./dist/adapters/fastify.d.ts",
+      "import": "./dist/adapters/fastify.js",
+      "require": "./dist/adapters/fastify.cjs"
+    },
+    "./koa": {
+      "types": "./dist/adapters/koa.d.ts",
+      "import": "./dist/adapters/koa.js",
+      "require": "./dist/adapters/koa.cjs"
+    },
+    "./hono": {
+      "types": "./dist/adapters/hono.d.ts",
+      "import": "./dist/adapters/hono.js",
+      "require": "./dist/adapters/hono.cjs"
+    },
+    "./next": {
+      "types": "./dist/adapters/next.d.ts",
+      "import": "./dist/adapters/next.js",
+      "require": "./dist/adapters/next.cjs"
+    },
+    "./http": {
+      "types": "./dist/adapters/http.d.ts",
+      "import": "./dist/adapters/http.js",
+      "require": "./dist/adapters/http.cjs"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "install.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "restless",
+    "metrics",
+    "api",
+    "logging",
+    "observability",
+    "express",
+    "fastify",
+    "koa",
+    "hono",
+    "nextjs"
+  ],
+  "author": "Restless",
+  "license": "ISC",
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsup": "^8.3.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  },
+  "peerDependencies": {
+    "fastify": ">=4",
+    "koa": ">=2",
+    "hono": ">=4",
+    "next": ">=13"
+  },
+  "peerDependenciesMeta": {
+    "fastify": { "optional": true },
+    "koa": { "optional": true },
+    "hono": { "optional": true },
+    "next": { "optional": true }
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
