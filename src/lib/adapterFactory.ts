@@ -6,10 +6,10 @@ import type { ClientOptions, SetupCallback } from "../types.js";
  * that builds a fully-configured client whose `.setup(cb)` returns middleware
  * directly.
  *
- *     const restless = require('@restlesshq/node/express')(process.env.RESTLESS_KEY);
+ *     const restless = require('@restlessai/sdk/express')(process.env.RESTLESS_KEY);
  *     app.use(restless.setup((req) => ({ ... })));
  *
- * The base `@restlesshq/node` factory still exists for advanced users who want
+ * The base `@restlessai/sdk` factory still exists for advanced users who want
  * a framework-less client.
  */
 export interface AdapterClient<M> {

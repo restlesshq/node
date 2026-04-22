@@ -2,8 +2,11 @@ import type {
   CapturedRequest,
   SetupCallback,
   SetupResult,
-  Project,
+  UserEnrichment,
 } from "../types.js";
+
+/** Shape returned by `engine.resolve()` — setup result + optional enrichment payload. */
+export type ResolvedSetup = SetupResult & { _enriched?: UserEnrichment };
 import { Uploader, type UploaderConfig } from "./uploader.js";
 import { Blocklist } from "./blocklist.js";
 import { EnrichCache } from "./enrichCache.js";
@@ -18,27 +21,24 @@ import {
 export const MAX_BODY_BYTES = 256 * 1024;
 
 export interface EngineConfig extends Omit<UploaderConfig, "onResponse"> {
-  defaultProject?: Project;
   redact?: RedactOptions;
 }
 
 /**
- * Shared capture engine. Adapters feed it raw request/response data; it
- * resolves setup callbacks (including lazy enrichment), applies redaction
- * + truncation, and hands the result to the uploader.
+ * Shared capture engine. Resolves setup callbacks (including lazy enrichment
+ * keyed by projectId), applies redaction + truncation, and hands the result
+ * to the uploader.
  */
 export class CaptureEngine {
   readonly uploader: Uploader;
   readonly blocklist: Blocklist;
   readonly enrichCache: EnrichCache;
   private callback: SetupCallback | null = null;
-  private defaultProject: Project | undefined;
   private redactOpts: RedactOptions;
 
   constructor(cfg: EngineConfig) {
     this.blocklist = new Blocklist();
     this.enrichCache = new EnrichCache();
-    this.defaultProject = cfg.defaultProject;
     this.redactOpts = cfg.redact || {};
     this.uploader = new Uploader({
       ...cfg,
@@ -52,8 +52,8 @@ export class CaptureEngine {
 
   /**
    * Called after every successful upload with the server's parsed response.
-   * Currently just handles `needsEnrichment: string[]` — masked keys the
-   * server wants re-enriched on the next request.
+   * Handles `needsEnrichment: string[]` — project IDs (or apiKeys when no
+   * project) the server wants re-enriched on the next request.
    */
   private handleServerResponse(body: unknown): void {
     if (!body || typeof body !== "object") return;
@@ -68,41 +68,34 @@ export class CaptureEngine {
     method: string;
     url: string;
     headers: Record<string, string>;
-  }): Promise<SetupResult> {
-    const base: SetupResult = this.defaultProject
-      ? { project: this.defaultProject }
-      : {};
-    if (!this.callback) return base;
+  }): Promise<ResolvedSetup> {
+    if (!this.callback) return {};
 
     let result: SetupResult;
     try {
       result = (await this.callback(req)) || {};
     } catch {
-      return base;
+      return {};
     }
 
-    // Separate enrich() from the rest so we never leak a function into
-    // the captured-request payload.
     const { enrich, ...rest } = result;
 
-    // Decide whether to run enrich: we need a masked apiKey to cache under,
-    // the enrich function must exist, and the key must be stale.
-    if (
-      typeof enrich === "function" &&
-      typeof rest.apiKey === "string" &&
-      !this.enrichCache.isFresh(rest.apiKey)
-    ) {
+    // Group identifier for caching — prefer projectId (coarse), fall back to
+    // apiKey (fine-grained). That way multiple end-users from one project
+    // share a cache slot.
+    const cacheKey = rest.projectId || rest.apiKey;
+
+    if (typeof enrich === "function" && cacheKey && !this.enrichCache.isFresh(cacheKey)) {
       try {
         const enriched = await enrich();
-        this.enrichCache.markFresh(rest.apiKey);
-        return { ...base, ...rest, ...enriched };
+        this.enrichCache.markFresh(cacheKey);
+        return { ...rest, _enriched: enriched };
       } catch {
-        // Enrichment failure must not break the request path; the log still
-        // ships without the extra metadata.
+        // Enrichment failure must not break the request path.
       }
     }
 
-    return { ...base, ...rest };
+    return rest;
   }
 
   /**

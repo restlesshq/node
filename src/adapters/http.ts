@@ -8,7 +8,7 @@ import type { SetupHandle } from "./_shared.js";
 /**
  * Bare Node http / Bun.serve-style adapter.
  *
- *     const restless = require('@restlesshq/node/http')(process.env.RESTLESS_KEY);
+ *     const restless = require('@restlessai/sdk/http')(process.env.RESTLESS_KEY);
  *     http.createServer(restless.setup(
  *       (req) => ({ ... }),
  *       (req, res) => myHandler(req, res),  // optional second arg: your handler

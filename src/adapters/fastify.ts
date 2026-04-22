@@ -1,4 +1,5 @@
-import type { ClientOptions, SetupResult } from "../types.js";
+import type { ClientOptions } from "../types.js";
+import type { ResolvedSetup } from "../lib/capture.js";
 import {
   isSetupHandle,
   newRequestId,
@@ -14,7 +15,7 @@ import { makeAdapterClient, type AdapterClient } from "../lib/adapterFactory.js"
 export async function restlessFastifyPlugin(fastify: any, handle: SetupHandle) {
   if (!isSetupHandle(handle)) {
     throw new Error(
-      "@restlesshq/node/fastify: expected restless.setup(cb). See README.",
+      "@restlessai/sdk/fastify: expected restless.setup(cb). See README.",
     );
   }
   const engine = handle.__restless.engine;
@@ -67,7 +68,7 @@ export async function restlessFastifyPlugin(fastify: any, handle: SetupHandle) {
   fastify.addHook("onSend", async (req: any, reply: any, payload: any) => {
     const state = req._restless as
       | {
-          setup: SetupResult;
+          setup: ResolvedSetup;
           reqHeaders: Record<string, string>;
           rawId: string;
           fullUrl: string;
@@ -124,8 +125,8 @@ export async function restlessFastifyPlugin(fastify: any, handle: SetupHandle) {
       duration,
       user: {
         apiKey: state.setup.apiKey,
-        email: state.setup.email,
-        project: state.setup.project,
+        projectId: state.setup.projectId,
+        project: state.setup._enriched?.project,
       },
     });
 
@@ -136,7 +137,7 @@ export async function restlessFastifyPlugin(fastify: any, handle: SetupHandle) {
 type FastifyPlugin = (fastify: any, handle: SetupHandle) => Promise<void>;
 
 /**
- *     const restless = require('@restlesshq/node/fastify')(process.env.RESTLESS_KEY);
+ *     const restless = require('@restlessai/sdk/fastify')(process.env.RESTLESS_KEY);
  *     await fastify.register(restless.setup((req) => ({ ... })));
  *
  * `setup(cb)` returns a function you pass straight to `fastify.register`

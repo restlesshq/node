@@ -39,15 +39,13 @@ describe("EnrichCache", () => {
   });
 });
 
-describe("CaptureEngine — enrichment flow", () => {
+describe("CaptureEngine: enrichment flow", () => {
   function mkEngine() {
-    const fetchImpl = vi
-      .fn()
-      .mockResolvedValue({
-        ok: true,
-        json: async () => ({ ingested: 1 }),
-        text: async () => "",
-      });
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ ingested: 1 }),
+      text: async () => "",
+    });
     const engine = new CaptureEngine({
       apiKey: "k",
       baseUrl: "http://localhost:3003",
@@ -56,45 +54,70 @@ describe("CaptureEngine — enrichment flow", () => {
     return { engine, fetchImpl };
   }
 
-  it("calls enrich() on the first-seen user and caches it", async () => {
+  it("calls enrich() on the first-seen project and caches it", async () => {
     const { engine } = mkEngine();
-    const enrich = vi.fn().mockResolvedValue({ email: "a@b.co" });
+    const enrich = vi
+      .fn()
+      .mockResolvedValue({ project: { label: "Acme", emails: ["a@b.co"] } });
     engine.setCallback(() => ({
       apiKey: "sha512-xxx?1234",
+      projectId: "acme-id",
       enrich,
     }));
 
     const first = await engine.resolve({ method: "GET", url: "/", headers: {} });
     expect(enrich).toHaveBeenCalledTimes(1);
-    expect(first).toMatchObject({ apiKey: "sha512-xxx?1234", email: "a@b.co" });
-    // enrich itself should not leak into the result
+    expect(first.projectId).toBe("acme-id");
+    expect(first._enriched).toEqual({
+      project: { label: "Acme", emails: ["a@b.co"] },
+    });
+    // enrich fn itself should not leak onto the result
     expect("enrich" in first).toBe(false);
 
     const second = await engine.resolve({ method: "GET", url: "/", headers: {} });
     expect(enrich).toHaveBeenCalledTimes(1); // cached
-    expect(second.email).toBeUndefined(); // no fresh enrichment on cached requests
+    expect(second._enriched).toBeUndefined();
   });
 
-  it("re-enriches after server invalidation", async () => {
+  it("caches by projectId so multiple apiKeys in one project share a slot", async () => {
     const { engine } = mkEngine();
-    const enrich = vi.fn().mockResolvedValue({ email: "a@b.co" });
+    const enrich = vi.fn().mockResolvedValue({ project: { label: "Acme" } });
+    let currentApiKey = "sha512-aaa?0001";
     engine.setCallback(() => ({
-      apiKey: "sha512-xxx?1234",
+      apiKey: currentApiKey,
+      projectId: "acme-id",
       enrich,
     }));
 
     await engine.resolve({ method: "GET", url: "/", headers: {} });
     expect(enrich).toHaveBeenCalledTimes(1);
 
-    // Server invalidates via the onResponse channel
-    (engine as unknown as {
-      handleServerResponse: (body: unknown) => void;
-    }).handleServerResponse({
-      needsEnrichment: ["sha512-xxx?1234"],
-    });
+    // Different user inside the same project — should hit cache
+    currentApiKey = "sha512-bbb?0002";
+    await engine.resolve({ method: "GET", url: "/", headers: {} });
+    expect(enrich).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-enriches after server invalidation on projectId", async () => {
+    const { engine } = mkEngine();
+    const enrich = vi.fn().mockResolvedValue({ project: { label: "Acme" } });
+    engine.setCallback(() => ({
+      apiKey: "sha512-xxx?1234",
+      projectId: "acme-id",
+      enrich,
+    }));
 
     await engine.resolve({ method: "GET", url: "/", headers: {} });
-    expect(enrich).toHaveBeenCalledTimes(2); // re-run after invalidation
+    expect(enrich).toHaveBeenCalledTimes(1);
+
+    (
+      engine as unknown as {
+        handleServerResponse: (body: unknown) => void;
+      }
+    ).handleServerResponse({ needsEnrichment: ["acme-id"] });
+
+    await engine.resolve({ method: "GET", url: "/", headers: {} });
+    expect(enrich).toHaveBeenCalledTimes(2);
   });
 
   it("swallows enrich() throws without breaking the request", async () => {
@@ -102,22 +125,31 @@ describe("CaptureEngine — enrichment flow", () => {
     const enrich = vi.fn().mockRejectedValue(new Error("db down"));
     engine.setCallback(() => ({
       apiKey: "sha512-xxx?1234",
+      projectId: "acme-id",
       enrich,
     }));
 
-    const result = await engine.resolve({
-      method: "GET",
-      url: "/",
-      headers: {},
-    });
+    const result = await engine.resolve({ method: "GET", url: "/", headers: {} });
     expect(result.apiKey).toBe("sha512-xxx?1234");
-    expect(result.email).toBeUndefined();
+    expect(result._enriched).toBeUndefined();
   });
 
-  it("skips enrich when apiKey is missing (nothing to cache under)", async () => {
+  it("falls back to caching by apiKey when no projectId", async () => {
     const { engine } = mkEngine();
-    const enrich = vi.fn().mockResolvedValue({ email: "x@y.co" });
-    engine.setCallback(() => ({ enrich })); // no apiKey
+    const enrich = vi.fn().mockResolvedValue({ project: { label: "Solo" } });
+    engine.setCallback(() => ({ apiKey: "sha512-xxx?1234", enrich }));
+
+    await engine.resolve({ method: "GET", url: "/", headers: {} });
+    expect(enrich).toHaveBeenCalledTimes(1);
+
+    await engine.resolve({ method: "GET", url: "/", headers: {} });
+    expect(enrich).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips enrich when neither projectId nor apiKey is set", async () => {
+    const { engine } = mkEngine();
+    const enrich = vi.fn().mockResolvedValue({ project: { label: "Nope" } });
+    engine.setCallback(() => ({ enrich }));
 
     await engine.resolve({ method: "GET", url: "/", headers: {} });
     expect(enrich).not.toHaveBeenCalled();
@@ -128,7 +160,7 @@ describe("CaptureEngine — enrichment flow", () => {
       ok: true,
       json: async () => ({
         ingested: 1,
-        needsEnrichment: ["sha512-xxx?1234"],
+        needsEnrichment: ["acme-id"],
       }),
       text: async () => "",
     });
@@ -138,16 +170,16 @@ describe("CaptureEngine — enrichment flow", () => {
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
 
-    const enrich = vi.fn().mockResolvedValue({ email: "a@b.co" });
+    const enrich = vi.fn().mockResolvedValue({ project: { label: "Acme" } });
     engine.setCallback(() => ({
       apiKey: "sha512-xxx?1234",
+      projectId: "acme-id",
       enrich,
     }));
 
     await engine.resolve({ method: "GET", url: "/", headers: {} });
     expect(enrich).toHaveBeenCalledTimes(1);
 
-    // Trigger an upload — the mocked fetch returns needsEnrichment
     engine.record({
       requestId: "r1",
       startedAt: new Date().toISOString(),
@@ -156,7 +188,6 @@ describe("CaptureEngine — enrichment flow", () => {
       duration: 1,
     });
     await new Promise((r) => setTimeout(r, 0));
-    // microtask chain: fetch.then → onResponse → invalidate
     await new Promise((r) => setTimeout(r, 0));
 
     await engine.resolve({ method: "GET", url: "/", headers: {} });

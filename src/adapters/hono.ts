@@ -13,7 +13,7 @@ import { makeAdapterClient, type AdapterClient } from "../lib/adapterFactory.js"
 export function honoMiddleware(handle: SetupHandle) {
   if (!isSetupHandle(handle)) {
     throw new Error(
-      "@restlesshq/node/hono: expected restless.setup(cb). See README.",
+      "@restlessai/sdk/hono: expected restless.setup(cb). See README.",
     );
   }
   const engine = handle.__restless.engine;
@@ -113,8 +113,8 @@ export function honoMiddleware(handle: SetupHandle) {
       duration,
       user: {
         apiKey: setup.apiKey,
-        email: setup.email,
-        project: setup.project,
+        projectId: setup.projectId,
+        project: setup._enriched?.project,
       },
     });
   };

@@ -1,8 +1,16 @@
 {
-  "name": "@restlesshq/node",
-  "version": "0.2.0",
+  "name": "@restlessai/sdk",
+  "version": "0.1.0",
   "description": "Capture API traffic and send it to Restless. Works with Express, Fastify, Koa, Hono, Next.js, and the bare Node http server. Runs on Node, Bun, and Deno.",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/restlesshq/node.git"
+  },
+  "homepage": "https://restless.ai",
+  "bugs": {
+    "url": "https://github.com/restlesshq/node/issues"
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {

@@ -5,7 +5,8 @@ import type {
   CapturedRequest,
   UserContext,
   HarEntry,
-  Project,
+  ProjectDetails,
+  UserEnrichment,
 } from "./types.js";
 import { CaptureEngine } from "./lib/capture.js";
 import { mask } from "./lib/mask.js";
@@ -24,7 +25,8 @@ export type {
   CapturedRequest,
   UserContext,
   HarEntry,
-  Project,
+  ProjectDetails,
+  UserEnrichment,
 };
 
 /** Client returned by `restless(apiKey, opts?)`. */
@@ -34,7 +36,7 @@ export interface RestlessClient {
 
   /**
    * Hash an end-user API key into the shared `sha512-<base64>?<last4>` format.
-   * Returns `undefined` for falsy input — pass the raw header through; don't
+   * Returns `undefined` for falsy input. Pass the raw header through; don't
    * substitute a string like `'anonymous'` (the last 4 chars would leak).
    */
   mask(apiKey: string | undefined | null): string | undefined;
@@ -42,21 +44,18 @@ export interface RestlessClient {
   /** Force-upload the queued batch. */
   flush(): Promise<void>;
 
-  /** @internal — adapters only. */
+  /** @internal: adapters only. */
   engine: CaptureEngine;
 }
 
 /**
  * Construct a restless client.
  *
- *     const restless = require('@restlesshq/node/express')(process.env.RESTLESS_KEY);
+ *     const restless = require('@restlessai/sdk/express')(process.env.RESTLESS_KEY);
  *     app.use(restless.setup((req) => ({
- *       apiKey: restless.mask(req.headers.authorization),
+ *       apiKey:    restless.mask(req.headers.authorization),
+ *       projectId: req.headers['x-tenant-id'],
  *     })));
- *
- * Auto-loads `.api/settings.json` (walking up from `cwd`) to populate the
- * project info and request-ID prefix. If that file defines multiple APIs,
- * pass `{ api: "<name>" }` to pick one.
  */
 function restless(apiKey?: string, opts: ClientOptions = {}): RestlessClient {
   const resolvedKey =
@@ -65,25 +64,24 @@ function restless(apiKey?: string, opts: ClientOptions = {}): RestlessClient {
     process.env.README_API_KEY ||
     "";
 
-  // Pull defaults from .api/settings.json (best-effort — the file may not exist)
-  let defaultProject: Project | undefined;
+  // Read .api/settings.json for per-API config: the requestIdPrefix and the
+  // redact lists. We no longer auto-populate a project on the SetupResult:
+  // projectId is now a customer/tenant concept the user supplies per-request.
   let requestIdPrefix: string | undefined;
   let settingsRedact: ClientOptions["redact"] | undefined;
   try {
     const settings = loadSettings();
     const api = resolveApi(settings, opts.api);
     if (api) {
-      defaultProject = { id: api.id, name: api.name };
       requestIdPrefix = api.requestIdPrefix;
       settingsRedact = api.redact;
     }
   } catch (err) {
-    // Multiple-APIs error — surface it so the user fixes their call site.
     throw err;
   }
 
   // Settings-sourced redaction + user-sourced redaction are BOTH additive on
-  // top of the built-in defaults. Neither overrides the other — they concat.
+  // top of the built-in defaults.
   const mergedRedact: ClientOptions["redact"] = {
     headers: [
       ...(settingsRedact?.headers || []),
@@ -104,7 +102,6 @@ function restless(apiKey?: string, opts: ClientOptions = {}): RestlessClient {
     baseUrl: resolveBaseUrl(),
     requestIdPrefix,
     fetchImpl: opts.fetch,
-    defaultProject,
     redact: mergedRedact,
   });
 

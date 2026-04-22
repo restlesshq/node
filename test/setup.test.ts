@@ -21,7 +21,8 @@ describe("restless() factory + setup()", () => {
   it("setup() stores the callback and returns a handle", () => {
     const client = restless("rdme_test");
     const cb = vi.fn().mockReturnValue({
-      project: { id: "x", name: "x" },
+      apiKey: "masked",
+      projectId: "acme",
     });
     const handle = client.setup(cb);
     expect(handle.__restless).toBe(client);
@@ -32,7 +33,7 @@ describe("restless() factory + setup()", () => {
     const client = restless("rdme_test");
     const cb = vi
       .fn()
-      .mockResolvedValue({ apiKey: "masked", project: { id: "x", name: "y" } });
+      .mockResolvedValue({ apiKey: "masked", projectId: "acme" });
     client.setup(cb);
     const result = await client.engine.resolve({
       method: "POST",
@@ -44,7 +45,8 @@ describe("restless() factory + setup()", () => {
       url: "http://x/y",
       headers: { authorization: "Bearer t" },
     });
-    expect(result.project).toEqual({ id: "x", name: "y" });
+    expect(result.apiKey).toBe("masked");
+    expect(result.projectId).toBe("acme");
   });
 
   it("swallows setup-callback errors", async () => {

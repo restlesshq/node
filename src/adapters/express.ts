@@ -16,7 +16,7 @@ import { makeAdapterClient, type AdapterClient } from "../lib/adapterFactory.js"
 export function expressMiddleware(handle: SetupHandle) {
   if (!isSetupHandle(handle)) {
     throw new Error(
-      "@restlesshq/node/express: expected restless.setup(cb). See README.",
+      "@restlessai/sdk/express: expected restless.setup(cb). See README.",
     );
   }
   const engine = handle.__restless.engine;
@@ -147,8 +147,8 @@ export function expressMiddleware(handle: SetupHandle) {
         duration,
         user: {
           apiKey: setup.apiKey,
-          email: setup.email,
-          project: setup.project,
+          projectId: setup.projectId,
+          project: setup._enriched?.project,
         },
       });
 
@@ -165,7 +165,7 @@ type ExpressMiddleware = ReturnType<typeof expressMiddleware>;
 /**
  * One-liner factory:
  *
- *     const restless = require('@restlesshq/node/express')(process.env.RESTLESS_KEY);
+ *     const restless = require('@restlessai/sdk/express')(process.env.RESTLESS_KEY);
  *     app.use(restless.setup((req) => ({ ... })));
  */
 export default function restlessExpress(

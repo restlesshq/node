@@ -55,7 +55,7 @@ describe("Uploader", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it("emits group + project in the payload", async () => {
+  it("emits apiKey + projectId + enriched project in the payload", async () => {
     let sentBody: string | undefined;
     const fetchImpl = vi.fn().mockImplementation(async (_url, init: any) => {
       sentBody = init.body;
@@ -69,15 +69,60 @@ describe("Uploader", () => {
     const cap = mkCaptured("id-123");
     cap.user = {
       apiKey: "sha512-xxx?1234",
-      project: { id: "acme-id", name: "Acme Inc" },
+      projectId: "acme-org-id",
+      project: { label: "Acme Inc", email: ["ops@acme.com", "ceo@acme.com"] },
     };
     up.push(cap);
     await new Promise((r) => setTimeout(r, 0));
     const parsed = JSON.parse(sentBody!);
     expect(parsed[0]._id).toBe("id-123");
-    expect(parsed[0].group.id).toBe("sha512-xxx?1234");
+    expect(parsed[0].apiKey).toBe("sha512-xxx?1234");
+    expect(parsed[0].projectId).toBe("acme-org-id");
+    expect(parsed[0].group.id).toBe("acme-org-id");
     expect(parsed[0].group.label).toBe("Acme Inc");
-    expect(parsed[0].project).toEqual({ id: "acme-id", name: "Acme Inc" });
+    expect(parsed[0].group.emails).toEqual(["ops@acme.com", "ceo@acme.com"]);
+  });
+
+  it("normalizes a single email string to an array on the wire", async () => {
+    let sentBody: string | undefined;
+    const fetchImpl = vi.fn().mockImplementation(async (_url, init: any) => {
+      sentBody = init.body;
+      return { ok: true, text: async () => "" };
+    });
+    const up = new Uploader({
+      apiKey: "k",
+      baseUrl: "http://localhost:3003",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    const cap = mkCaptured("id-solo");
+    cap.user = {
+      apiKey: "sha512-xxx?1234",
+      project: { label: "Solo", email: "owner@solo.dev" },
+    };
+    up.push(cap);
+    await new Promise((r) => setTimeout(r, 0));
+    const parsed = JSON.parse(sentBody!);
+    expect(parsed[0].group.emails).toEqual(["owner@solo.dev"]);
+  });
+
+  it("falls back to apiKey as the group id when projectId is absent", async () => {
+    let sentBody: string | undefined;
+    const fetchImpl = vi.fn().mockImplementation(async (_url, init: any) => {
+      sentBody = init.body;
+      return { ok: true, text: async () => "" };
+    });
+    const up = new Uploader({
+      apiKey: "k",
+      baseUrl: "http://localhost:3003",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    const cap = mkCaptured("id-456");
+    cap.user = { apiKey: "sha512-xxx?1234" };
+    up.push(cap);
+    await new Promise((r) => setTimeout(r, 0));
+    const parsed = JSON.parse(sentBody!);
+    expect(parsed[0].group.id).toBe("sha512-xxx?1234");
+    expect(parsed[0].projectId).toBeUndefined();
   });
 
   it("caps the queue at MAX_QUEUE (drops oldest)", () => {

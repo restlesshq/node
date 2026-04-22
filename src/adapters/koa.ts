@@ -13,7 +13,7 @@ import { makeAdapterClient, type AdapterClient } from "../lib/adapterFactory.js"
 export function koaMiddleware(handle: SetupHandle) {
   if (!isSetupHandle(handle)) {
     throw new Error(
-      "@restlesshq/node/koa: expected restless.setup(cb). See README.",
+      "@restlessai/sdk/koa: expected restless.setup(cb). See README.",
     );
   }
   const engine = handle.__restless.engine;
@@ -109,8 +109,8 @@ export function koaMiddleware(handle: SetupHandle) {
       duration,
       user: {
         apiKey: setup.apiKey,
-        email: setup.email,
-        project: setup.project,
+        projectId: setup.projectId,
+        project: setup._enriched?.project,
       },
     });
   };

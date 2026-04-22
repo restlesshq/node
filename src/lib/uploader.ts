@@ -63,7 +63,7 @@ export class Uploader {
         url.hostname === "localhost" || url.hostname === "127.0.0.1";
       if (url.protocol === "http:" && !isLocal) {
         console.warn(
-          `[@restlesshq/node] RESTLESS_BASE_URL=${this.baseUrl} is plain HTTP — your API key and every captured header will be transmitted unencrypted. Use https:// or localhost.`,
+          `[@restlessai/sdk] RESTLESS_BASE_URL=${this.baseUrl} is plain HTTP — your API key and every captured header will be transmitted unencrypted. Use https:// or localhost.`,
         );
       }
     } catch {
@@ -95,7 +95,7 @@ export class Uploader {
       this.queue.shift();
       if (debugEnabled())
         console.warn(
-          `[@restlesshq/node] queue at ${MAX_QUEUE} — dropping oldest captured request`,
+          `[@restlessai/sdk] queue at ${MAX_QUEUE} — dropping oldest captured request`,
         );
     }
     this.queue.push(captured);
@@ -116,7 +116,7 @@ export class Uploader {
     if (this.queue.length === 0) return;
     if (!this.apiKey) {
       if (debugEnabled())
-        console.warn("[@restlesshq/node] no API key — dropping batch");
+        console.warn("[@restlessai/sdk] no API key — dropping batch");
       this.queue.length = 0;
       return;
     }
@@ -127,21 +127,38 @@ export class Uploader {
       const entry = toHarEntry(captured);
       const user = captured.user || {};
       const project = user.project;
+
+      // Normalize email to an array on the wire — user API accepts either
+      // string or string[], but the server gets a consistent shape.
+      const rawEmail = project?.email;
+      const emails = Array.isArray(rawEmail)
+        ? rawEmail
+        : rawEmail
+        ? [rawEmail]
+        : [];
+
       return {
         _id: captured.requestId,
         routePattern: captured.routePattern,
+        // The primary grouping key. projectId if provided (so multiple
+        // end-users within one project aggregate together), falling back
+        // to the individual apiKey.
         group: {
-          id: user.apiKey || user.email || "anonymous",
-          label: project?.name || "",
-          email: user.email || "",
+          id: user.projectId || user.apiKey || "anonymous",
+          label: project?.label || "",
+          emails,
         },
-        project: project ? { id: project.id, name: project.name } : undefined,
+        // Individual end-user fingerprint (separate from the grouping key).
+        apiKey: user.apiKey,
+        // Project ID carried separately so the server can index on it
+        // independent of the group slot.
+        projectId: user.projectId,
         clientIPAddress: "127.0.0.1",
         development: false,
         request: {
           log: {
             version: "1.2",
-            creator: { name: "@restlesshq/node", version: "0.2.0" },
+            creator: { name: "@restlessai/sdk", version: "0.2.0" },
             entries: [entry],
           },
         },
@@ -160,7 +177,7 @@ export class Uploader {
       if (!res.ok) {
         if (debugEnabled()) {
           console.error(
-            `[@restlesshq/node] upload failed: ${res.status} ${await res.text()}`,
+            `[@restlessai/sdk] upload failed: ${res.status} ${await res.text()}`,
           );
         }
         return;
@@ -177,7 +194,7 @@ export class Uploader {
       }
     } catch (err) {
       if (debugEnabled())
-        console.error("[@restlesshq/node] upload error:", err);
+        console.error("[@restlessai/sdk] upload error:", err);
     }
   }
 }

@@ -15,7 +15,7 @@ type NextHandler = (req: Request, ctx?: any) => Promise<Response> | Response;
 export function nextWrapFactory(handle: SetupHandle) {
   if (!isSetupHandle(handle)) {
     throw new Error(
-      "@restlesshq/node/next: expected restless.setup(cb). See README.",
+      "@restlessai/sdk/next: expected restless.setup(cb). See README.",
     );
   }
   const engine = handle.__restless.engine;
@@ -116,8 +116,8 @@ export function nextWrapFactory(handle: SetupHandle) {
         duration,
         user: {
           apiKey: setup.apiKey,
-          email: setup.email,
-          project: setup.project,
+          projectId: setup.projectId,
+          project: setup._enriched?.project,
         },
       });
 

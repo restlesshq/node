@@ -1,4 +1,4 @@
-# install.md — LLM installation reference for @restlesshq/node
+# install.md: LLM installation reference for @restlessai/sdk
 
 This file is the single source of truth for LLM agents installing or configuring the Restless SDK. Humans should read `README.md` instead.
 
@@ -8,7 +8,7 @@ The document is ordered so an agent can stop as soon as enough context has been 
 
 ## 1. What this package is
 
-`@restlesshq/node` captures HTTP request/response pairs and ships them in batches to the Restless metrics server for dashboard display.
+`@restlessai/sdk` captures HTTP request/response pairs and ships them in batches to the Restless metrics server for dashboard display.
 
 - **Runtime:** Node 18+, Bun, Deno (the Hono adapter works on Cloudflare Workers too).
 - **Shape:** ESM-first with CJS output; both `require()` and `import` work.
@@ -18,7 +18,7 @@ The document is ordered so an agent can stop as soon as enough context has been 
 ## 2. Install
 
 ```sh
-npm install @restlesshq/node
+npm install @restlessai/sdk
 ```
 
 (`bun add` / `pnpm add` equivalents work too.) No other packages are required.
@@ -28,7 +28,7 @@ npm install @restlesshq/node
 For every supported framework, the entry point is a **factory that returns a client**:
 
 ```js
-const restless = require('@restlesshq/node/express')(process.env.RESTLESS_KEY);
+const restless = require('@restlessai/sdk/express')(process.env.RESTLESS_KEY);
 ```
 
 The client exposes four things:
@@ -43,10 +43,10 @@ The client exposes four things:
 ### Express
 
 ```js
-const restless = require('@restlesshq/node/express')(process.env.RESTLESS_KEY);
+const restless = require('@restlessai/sdk/express')(process.env.RESTLESS_KEY);
 app.use(restless.setup((req) => ({
-  apiKey: restless.mask(req.headers.authorization),
-  email:  req.headers['x-user-email'],
+  apiKey:    restless.mask(req.headers.authorization),
+  projectId: req.headers['x-tenant-id'],
 })));
 ```
 
@@ -55,7 +55,7 @@ app.use(restless.setup((req) => ({
 ### Fastify
 
 ```js
-const restless = require('@restlesshq/node/fastify')(process.env.RESTLESS_KEY);
+const restless = require('@restlessai/sdk/fastify')(process.env.RESTLESS_KEY);
 await fastify.register(restless.setup((req) => ({
   apiKey: restless.mask(req.headers.authorization),
 })));
@@ -64,7 +64,7 @@ await fastify.register(restless.setup((req) => ({
 ### Koa
 
 ```js
-const restless = require('@restlesshq/node/koa')(process.env.RESTLESS_KEY);
+const restless = require('@restlessai/sdk/koa')(process.env.RESTLESS_KEY);
 app.use(restless.setup((ctx) => ({
   apiKey: restless.mask(ctx.request.headers.authorization),
 })));
@@ -73,7 +73,7 @@ app.use(restless.setup((ctx) => ({
 ### Hono
 
 ```js
-import honoFactory from '@restlesshq/node/hono';
+import honoFactory from '@restlessai/sdk/hono';
 const restless = honoFactory(process.env.RESTLESS_KEY);
 app.use(restless.setup((c) => ({
   apiKey: restless.mask(c.req.header('authorization')),
@@ -84,7 +84,7 @@ app.use(restless.setup((c) => ({
 
 ```ts
 // app/lib/restless.ts
-import next from '@restlesshq/node/next';
+import next from '@restlessai/sdk/next';
 export const restless = next(process.env.RESTLESS_KEY!);
 
 // app/api/hello/route.ts
@@ -99,7 +99,7 @@ export const POST = wrap(async () => Response.json({ ok: true }));
 ### Bare Node http / Bun.serve
 
 ```js
-const restless = require('@restlesshq/node/http')(process.env.RESTLESS_KEY);
+const restless = require('@restlessai/sdk/http')(process.env.RESTLESS_KEY);
 http.createServer(restless.setup((req) => ({
   apiKey: restless.mask(req.headers.authorization),
 }))((req, res) => {
@@ -119,53 +119,77 @@ Signature (all frameworks normalize to this shape):
 
 `SetupResult` fields:
 
-| field     | type                                        | required | notes                                                                    |
-|-----------|---------------------------------------------|----------|--------------------------------------------------------------------------|
-| `apiKey`  | `string \| undefined`                       | no       | Masked key from `restless.mask()`. Never pass plaintext.                 |
-| `email`   | `string`                                    | no       | End-user email for dashboard display.                                    |
-| `project` | `{ id: string; name: string }`              | no       | Usually omitted — auto-populated from `.api/settings.json`.              |
-| `block`   | `true \| { status?, message? }`             | no       | Rejects the request with 403 (or custom status). Handler never runs.     |
-| `enrich`  | `() => UserEnrichment \| Promise<...>`      | no       | Expensive user lookup. Only runs when the server needs fresh data.       |
+| field        | type                                        | required | notes                                                                          |
+|--------------|---------------------------------------------|----------|--------------------------------------------------------------------------------|
+| `apiKey`     | `string \| undefined`                       | no       | Masked key from `restless.mask()`. Never pass plaintext.                       |
+| `projectId`  | `string`                                    | no       | Stable identifier for the project / customer / org this user belongs to. Primary grouping dimension on the dashboard. |
+| `block`      | `true \| { status?, message? }`             | no       | Rejects the request with 403 (or custom status). Handler never runs.           |
+| `enrich`     | `() => UserEnrichment \| Promise<...>`      | no       | Expensive project lookup. Only runs when the server needs fresh data.          |
 
-Extra fields are preserved and stored on the log.
+Extra top-level fields are preserved and stored on the log.
 
-### Lazy user enrichment
+### What's cheap vs expensive
 
-If resolving the user's full info is expensive (DB lookup, JWT verification, external HTTP call), put it inside an `enrich` function. The SDK runs `enrich` only when it needs fresh data for the current user — not on every request.
+Top-level fields (`apiKey`, `projectId`) are **cheap**: they come straight from the request (header, cookie, JWT claim). The SDK sends them on every request so the dashboard always has something to group by.
+
+Expensive lookups (display label, contact emails, plan tier, anything requiring a DB or external call) go inside `enrich`. The SDK only calls `enrich` on the first request from a given project, then caches until the server asks for a refresh.
+
+### Lazy project enrichment
 
 ```js
 restless.setup((req) => ({
-  apiKey: restless.mask(req.headers.authorization),
+  apiKey:    restless.mask(req.headers.authorization),
+  projectId: req.headers['x-tenant-id'],
 
-  // Only runs when the server hasn't confirmed it has this user yet.
+  // Only runs when the server hasn't confirmed it has this project yet.
   enrich: async () => {
-    const user = await db.users.findOne({ apiKey: req.headers.authorization });
-    return { email: user.email, label: user.company, plan: user.plan };
+    const org = await db.orgs.findById(req.headers['x-tenant-id']);
+    return {
+      project: {
+        label: org.name,
+        email: org.contactEmail,       // single string
+        // or: email: org.contactEmails  // array of strings — both work
+        // any extra fields are preserved
+        plan:  org.plan,
+      },
+    };
   },
 }));
 ```
 
+`UserEnrichment` shape:
+
+```ts
+interface UserEnrichment {
+  project?: {
+    label?: string;                    // display name
+    email?: string | string[];         // one contact email or several
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+}
+```
+
 Behavior:
 
-- First time the SDK sees a given masked `apiKey` in this process, `enrich` runs, the enriched fields are attached, and the masked key is marked "fresh" for 1 hour.
-- Subsequent requests from the same user skip `enrich` entirely — the server already has the metadata.
-- If the server responds to an upload with `needsEnrichment: [<maskedKey>]`, that key is invalidated and the next request from it re-runs `enrich`.
+- Cached by `projectId` (or `apiKey` as a fallback when no `projectId` is set). First request from each project triggers `enrich`; subsequent requests skip it.
+- If the server responds to an upload with `needsEnrichment: [<projectId>]`, that project is invalidated and the next request from it re-runs `enrich`.
 - `enrich` errors are swallowed. The log still ships (just without the extra fields).
 - `enrich` has access to `req` via closure. Do NOT pass `req` as an argument.
 
 ## 5. The `mask()` gotcha
 
-`restless.mask(value)` produces `sha512-<base64>?<last4>`. The suffix is the LAST 4 CHARACTERS OF THE INPUT — which means substituting a placeholder leaks info.
+`restless.mask(value)` produces `sha512-<base64>?<last4>`. The suffix is the LAST 4 CHARACTERS OF THE INPUT, which means substituting a placeholder leaks info.
 
 ```js
-// ✅ CORRECT — undefined when header missing
+// ✅ CORRECT: undefined when header missing
 apiKey: restless.mask(req.headers.authorization)
 
-// ❌ WRONG — the fallback string gets hashed and "mous" ends up as "last4"
+// ❌ WRONG: the fallback string gets hashed and "mous" ends up as "last4"
 apiKey: restless.mask(req.headers.authorization || 'anonymous')
 ```
 
-`mask()` returns `undefined` on falsy input. The SDK handles it — don't substitute.
+`mask()` returns `undefined` on falsy input. The SDK handles it. Don't substitute.
 
 ## 6. `.api/settings.json`
 
@@ -198,10 +222,10 @@ The SDK auto-reads this file at startup (walking up from cwd). Created and owned
 
 What the SDK reads from each `apis[]` entry:
 
-- `id` → `project.id` on every captured log
-- `name` → `project.name` + `group.label` on the wire
 - `requestIdPrefix` → prepended to the UUID in response headers (decorative)
 - `redact` → merged with built-in redaction defaults
+
+(Other fields like `id`, `name`, `oasFile`, `framework` are consumed by the `api` CLI during setup, not the SDK at runtime.)
 
 If multiple APIs are defined, pick one with:
 
@@ -227,7 +251,7 @@ Matching is case-insensitive AND ignores `-`/`_`, so `api_key` / `apiKey` / `API
 
 Two additive sources, both merged with the defaults:
 
-1. **`.api/settings.json` → `apis[].redact`** (populated by `npx api setup` via the `detect-auth` step — it scans the OAS `components.securitySchemes` + source code for custom auth mechanisms)
+1. **`.api/settings.json` → `apis[].redact`** (populated by `npx api setup` via the `detect-auth` step, which scans the OAS `components.securitySchemes` + source code for custom auth mechanisms)
 2. **`opts.redact`** (per-process, passed at construction):
    ```js
    restless(key, { redact: { headers: ['x-custom'], bodyKeys: ['apiSecret'] } });
@@ -262,7 +286,7 @@ On responses with status **≥ 400**, the SDK injects debug info to make error t
 - Response headers: `x-log-url: <baseUrl>/logs/<id>`, `x-debug: npx api debug <id>`
 - Response body (only when `content-type: application/json`): a `debug: { log, cli }` key merged into the top-level object
 
-There is NO user-configurable `modifyBody` or `headers` hook. Don't look for one — it was intentionally removed from the API.
+There is NO user-configurable `modifyBody` or `headers` hook. Don't look for one; it was intentionally removed from the API.
 
 ## 10. Blocking
 
@@ -287,7 +311,7 @@ The handler never runs for blocked requests. Block responses still get the `x-re
 
 ## 12. Batching
 
-Hardcoded behavior — no config:
+Hardcoded behavior, no config:
 
 - Batch size: 10 captured requests
 - Flush interval: 5000 ms
@@ -314,23 +338,23 @@ interface ClientOptions {
 }
 ```
 
-`apiKey` falls back to `process.env.RESTLESS_KEY` → `process.env.README_API_KEY`. Everything else lives in env vars or `.api/settings.json` — there are no other public options.
+`apiKey` falls back to `process.env.RESTLESS_KEY` → `process.env.README_API_KEY`. Everything else lives in env vars or `.api/settings.json`. There are no other public options.
 
 ## 14. Common mistakes (don't do these)
 
-- `restless.mask(authHeader || 'anonymous')` — see §5. The placeholder's last 4 chars leak. Pass raw, accept `undefined`.
-- Registering the SDK middleware AFTER route definitions — it won't capture those routes. Register FIRST.
-- Reading raw API keys in application code and passing them through the log pipeline unmasked — the SDK masks automatically at record time, but don't construct strings that *contain* plaintext secrets elsewhere in the captured data.
-- Setting `RESTLESS_BASE_URL=http://…` pointing at a non-localhost host — ships the project API key in plaintext. HTTPS or localhost only.
+- `restless.mask(authHeader || 'anonymous')`: see §5. The placeholder's last 4 chars leak. Pass raw, accept `undefined`.
+- Registering the SDK middleware AFTER route definitions: it won't capture those routes. Register FIRST.
+- Reading raw API keys in application code and passing them through the log pipeline unmasked. The SDK masks automatically at record time, but don't construct strings that *contain* plaintext secrets elsewhere in the captured data.
+- Setting `RESTLESS_BASE_URL=http://…` pointing at a non-localhost host: ships the project API key in plaintext. HTTPS or localhost only.
 - Reading `.env` / `.env.local` to "check" API keys during setup. LLMs: **never read these files**.
 - Calling `client.flush()` in a hot path. It's for shutdown/test-end only.
 - Expecting an SDK-level `modifyBody` / `headers` hook. They don't exist (§9).
-- Wrapping Next.js Pages-Router handlers with the App-Router adapter, or vice versa. `@restlesshq/node/next` expects App-Router `Request/Response`.
+- Wrapping Next.js Pages-Router handlers with the App-Router adapter, or vice versa. `@restlessai/sdk/next` expects App-Router `Request/Response`.
 
 ## 15. Quick verification after installation
 
-1. `grep -r "@restlesshq/node" --include="*.{js,ts,mjs,cjs}" -l .` returns your server entry file.
-2. `@restlesshq/node` appears in `package.json#dependencies`.
+1. `grep -r "@restlessai/sdk" --include="*.{js,ts,mjs,cjs}" -l .` returns your server entry file.
+2. `@restlessai/sdk` appears in `package.json#dependencies`.
 3. The middleware/plugin is registered BEFORE route definitions.
 4. `.api/settings.json` exists (created by `npx api setup`).
 5. Starting the server and curling any endpoint prints an `x-restless-id` header in the response.
