@@ -1,6 +1,6 @@
 {
   "name": "@restlessai/sdk",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Capture API traffic and send it to Restless. Works with Express, Fastify, Koa, Hono, Next.js, and the bare Node http server. Runs on Node, Bun, and Deno.",
   "type": "module",
   "repository": {
@@ -89,10 +89,18 @@
     "next": ">=13"
   },
   "peerDependenciesMeta": {
-    "fastify": { "optional": true },
-    "koa": { "optional": true },
-    "hono": { "optional": true },
-    "next": { "optional": true }
+    "fastify": {
+      "optional": true
+    },
+    "koa": {
+      "optional": true
+    },
+    "hono": {
+      "optional": true
+    },
+    "next": {
+      "optional": true
+    }
   },
   "engines": {
     "node": ">=18"
