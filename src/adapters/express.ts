@@ -39,11 +39,10 @@ export function expressMiddleware(handle: SetupHandle) {
     const host = req.headers.host || "localhost";
     const fullUrl = `${protocol}://${host}${req.url || "/"}`;
 
-    const setup = await engine.resolve({
-      method: req.method || "GET",
-      url: fullUrl,
-      headers: reqHeaders,
-    });
+    // Pass the native Express req through — users can access
+    // req.user, req.session, req.locals, or whatever their auth
+    // middleware attached.
+    const setup = await engine.resolve(req);
 
     const blocked = resolveBlock(setup);
     if (blocked) {

@@ -118,13 +118,15 @@ export interface HarEntry {
   timings: { send: number; wait: number; receive: number };
 }
 
-/** Callback passed into `restless.setup()`. */
-export type SetupCallback = (
-  req: {
-    method: string;
-    url: string;
-    headers: Record<string, string>;
-  },
+/**
+ * Callback passed into `restless.setup()`. Receives the framework-native
+ * request object (Express `req`, Fastify `req`, Koa `ctx`, Hono `c`,
+ * Next.js `Request`, Node `IncomingMessage`). Access headers / user /
+ * session / whatever your middleware attached the way you normally would
+ * in that framework.
+ */
+export type SetupCallback<TReq = any> = (
+  req: TReq,
 ) => SetupResult | Promise<SetupResult>;
 
 /** Public options for `restless(apiKey, opts?)`. */

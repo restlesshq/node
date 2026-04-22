@@ -28,11 +28,8 @@ export function nextWrapFactory(handle: SetupHandle) {
         reqHeaders[k] = v;
       });
 
-      const setup = await engine.resolve({
-        method: req.method,
-        url: req.url,
-        headers: reqHeaders,
-      });
+      // Pass the native Request through — same as route handlers see.
+      const setup = await engine.resolve(req);
 
       const blocked = resolveBlock(setup);
       if (blocked) {

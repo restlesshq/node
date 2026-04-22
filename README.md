@@ -24,31 +24,27 @@ npm install @restlessai/sdk
 const restless = require('@restlessai/sdk')(process.env.RESTLESS_KEY);
 
 app.use(restless.setup((req) => ({
-  // Identifies the end-user (cheap, every request).
   apiKey: restless.mask(req.headers.authorization),
-
-  // The customer / tenant / org this user belongs to.
-  // Optional for single-tenant apps, recommended for multi-tenant SaaS.
   project: {
-    // Required: stable id, used as the grouping dimension on the dashboard.
-    id: req.headers['x-tenant-id'],
-
-    // Optional: lazy resolver for expensive project metadata (DB lookup,
-    // JWT verification, etc.). Runs once per id on first-seen and on
-    // server-requested invalidation, then cached. 100 requests from the
-    // same project don't hit your DB 100 times.
+    id: /* this user's unique project id */,
     enrich: async (id) => {
-      const org = await db.orgs.findById(id);
+      // Lazy-resolved: runs once per project id, then cached.
+      // Fill in with your own lookup (DB, JWT, API, etc.).
+      //
+      //   const project = await db.projects.findById(id);
+
       return {
-        label: org.name,            // display name on the dashboard
-        email: org.contactEmail,    // string or string[]
+        /*
+          label: project.name,
+          email: project.email,  // email or array of emails
+        */
       };
     },
   },
 })));
 ```
 
-**No framework subpath needed.** `require('@restlessai/sdk')` auto-detects the framework at runtime from the call signature. The setup pattern is identical; only registration differs:
+Here's how to set it up for your framework:
 
 | framework | registration                                                          |
 |-----------|-----------------------------------------------------------------------|

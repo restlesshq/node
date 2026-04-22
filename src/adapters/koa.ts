@@ -26,11 +26,9 @@ export function koaMiddleware(handle: SetupHandle) {
     }
     const fullUrl = `${ctx.protocol}://${ctx.host}${ctx.originalUrl || ctx.url}`;
 
-    const setup = await engine.resolve({
-      method: ctx.method,
-      url: fullUrl,
-      headers: reqHeaders,
-    });
+    // Pass the native Koa ctx through — users can access ctx.state,
+    // ctx.request.body, etc.
+    const setup = await engine.resolve(ctx);
 
     const blocked = resolveBlock(setup);
     if (blocked) {

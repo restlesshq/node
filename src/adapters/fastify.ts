@@ -32,11 +32,9 @@ export async function restlessFastifyPlugin(fastify: any, handle: SetupHandle) {
     const host = req.headers.host || "localhost";
     const fullUrl = `${protocol}://${host}${req.raw.url || "/"}`;
 
-    const setup = await engine.resolve({
-      method: req.raw.method || "GET",
-      url: fullUrl,
-      headers: reqHeaders,
-    });
+    // Pass the native Fastify request through — users can access anything
+    // their decorators / hooks attached.
+    const setup = await engine.resolve(req);
 
     const blocked = resolveBlock(setup);
     if (blocked) {

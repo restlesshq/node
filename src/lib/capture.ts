@@ -63,11 +63,7 @@ export class CaptureEngine {
     }
   }
 
-  async resolve(req: {
-    method: string;
-    url: string;
-    headers: Record<string, string>;
-  }): Promise<ResolvedSetup> {
+  async resolve(req: unknown): Promise<ResolvedSetup> {
     if (!this.callback) return {};
 
     let result: SetupResult;

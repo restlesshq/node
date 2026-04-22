@@ -26,11 +26,9 @@ export function honoMiddleware(handle: SetupHandle) {
       reqHeaders[k] = v;
     });
 
-    const setup = await engine.resolve({
-      method: req.method,
-      url: req.url,
-      headers: reqHeaders,
-    });
+    // Pass the native Hono Context through — users can access
+    // c.get('user'), c.var, c.env, etc.
+    const setup = await engine.resolve(c);
 
     const blocked = resolveBlock(setup);
     if (blocked) {
