@@ -10,7 +10,7 @@ import {
 } from "./_shared.js";
 import { makeAdapterClient, type AdapterClient } from "../lib/adapterFactory.js";
 
-export function honoMiddleware(handle: SetupHandle) {
+function honoMiddleware(handle: SetupHandle) {
   if (!isSetupHandle(handle)) {
     throw new Error(
       "@restlessai/sdk/hono: expected restless.setup(cb). See README.",
@@ -119,9 +119,11 @@ export function honoMiddleware(handle: SetupHandle) {
 
 type HonoMiddleware = ReturnType<typeof honoMiddleware>;
 
-export default function restlessHono(
+function restlessHono(
   apiKey?: string,
   opts: ClientOptions = {},
 ): AdapterClient<HonoMiddleware> {
   return makeAdapterClient(apiKey, opts, (handle) => honoMiddleware(handle));
 }
+
+export default Object.assign(restlessHono, { middleware: honoMiddleware });

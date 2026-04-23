@@ -1,9 +1,21 @@
 import type { SetupHandle } from "../adapters/_shared.js";
-import { expressMiddleware } from "../adapters/express.js";
-import { koaMiddleware } from "../adapters/koa.js";
-import { honoMiddleware } from "../adapters/hono.js";
-import { nextWrapFactory } from "../adapters/next.js";
-import { restlessFastifyPlugin } from "../adapters/fastify.js";
+import restlessExpress from "../adapters/express.js";
+import restlessKoa from "../adapters/koa.js";
+import restlessHono from "../adapters/hono.js";
+import restlessNext from "../adapters/next.js";
+import restlessFastify from "../adapters/fastify.js";
+
+// The adapter defaults attach their raw helpers as properties. Read them
+// lazily (not at module-eval time) because index.ts → universal.ts → adapters
+// → adapterFactory.ts → index.ts is a cycle, and the default-export binding
+// isn't initialized yet when universal.ts runs.
+const expressMiddleware = (handle: SetupHandle) =>
+  restlessExpress.middleware(handle);
+const koaMiddleware = (handle: SetupHandle) => restlessKoa.middleware(handle);
+const honoMiddleware = (handle: SetupHandle) => restlessHono.middleware(handle);
+const nextWrapFactory = (handle: SetupHandle) => restlessNext.wrap(handle);
+const restlessFastifyPlugin = (fastify: any, handle: SetupHandle) =>
+  restlessFastify.plugin(fastify, handle);
 
 /**
  * Polymorphic middleware / plugin / wrapper.

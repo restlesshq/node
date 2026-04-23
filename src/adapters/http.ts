@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { ClientOptions } from "../types.js";
 import type { SetupCallback } from "../types.js";
-import { expressMiddleware } from "./express.js";
+import restlessExpress from "./express.js";
 import { makeAdapterClient, type AdapterClient } from "../lib/adapterFactory.js";
 import type { SetupHandle } from "./_shared.js";
 
@@ -21,7 +21,7 @@ type HttpHandler = (req: IncomingMessage, res: ServerResponse) => void | Promise
 type HttpListenerBuilder = (handler: HttpHandler) => HttpHandler;
 
 function buildHttpBuilder(handle: SetupHandle): HttpListenerBuilder {
-  const mw = expressMiddleware(handle);
+  const mw = restlessExpress.middleware(handle);
   return (handler: HttpHandler) => {
     return (req: IncomingMessage, res: ServerResponse) => {
       mw(req, res, () => {

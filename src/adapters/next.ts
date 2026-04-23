@@ -12,7 +12,7 @@ import { makeAdapterClient, type AdapterClient } from "../lib/adapterFactory.js"
 
 type NextHandler = (req: Request, ctx?: any) => Promise<Response> | Response;
 
-export function nextWrapFactory(handle: SetupHandle) {
+function nextWrapFactory(handle: SetupHandle) {
   if (!isSetupHandle(handle)) {
     throw new Error(
       "@restlessai/sdk/next: expected restless.setup(cb). See README.",
@@ -128,9 +128,11 @@ export function nextWrapFactory(handle: SetupHandle) {
 
 type NextWrap = ReturnType<typeof nextWrapFactory>;
 
-export default function restlessNext(
+function restlessNext(
   apiKey?: string,
   opts: ClientOptions = {},
 ): AdapterClient<NextWrap> {
   return makeAdapterClient(apiKey, opts, (handle) => nextWrapFactory(handle));
 }
+
+export default Object.assign(restlessNext, { wrap: nextWrapFactory });

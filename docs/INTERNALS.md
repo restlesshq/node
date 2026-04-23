@@ -153,6 +153,12 @@ For fleet-wide blocking (e.g. revoked keys across a cluster), the `Blocklist` cl
 | `RESTLESS_BASE_URL`  | Override the metrics server URL. **Plain HTTP to a non-localhost host triggers a one-shot warning on stderr**. Your API key ships in the clear. |
 | `DEBUG=restless`     | Print upload errors and diagnostics on stderr                     |
 
+### `.env` auto-load
+
+If `RESTLESS_KEY` (and `README_API_KEY`) are both unset when `restless()` is called, the SDK walks up from `process.cwd()` looking for a `.env` file and loads it. Uses `process.loadEnvFile()` on Node 20.6+ and a minimal built-in parser on Node 18. Never overwrites vars already set in `process.env`, so `dotenv`, `--env-file`, and shell exports all win against the auto-loader.
+
+**Monorepo caveat:** the walk starts from `cwd`, not from the caller's source file location. `cd packages/api && node index.js` picks up `packages/api/.env` as expected. Running `node packages/api/index.js` from the repo root picks up the repo-root `.env` instead, because that's what `cwd` points at. This matches how `dotenv` and `--env-file` behave. If you want per-package env in a monorepo, launch from inside the package or pass the key explicitly to `restless(key)`.
+
 ## Failure modes
 
 - **Missing API key:** the batch is dropped silently. With `DEBUG=restless` you'll see a warning.

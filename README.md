@@ -69,7 +69,7 @@ Full per-framework examples are in [`install.md`](./install.md).
 
 | variable             | purpose                                                     |
 |----------------------|-------------------------------------------------------------|
-| `RESTLESS_KEY`       | Your project API key. Used if you don't pass one explicitly.     |
+| `RESTLESS_KEY`       | Your project API key. Used if you don't pass one explicitly. Auto-loaded from `.env` (walking up from `cwd`) if not already set. |
 | `RESTLESS_BASE_URL`  | Override the metrics server URL (self-hosted / staging).    |
 | `DEBUG=restless`     | Print upload diagnostics to stderr.                         |
 

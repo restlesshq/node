@@ -16,6 +16,7 @@ import {
   stripRequestIdPrefix,
 } from "./lib/requestId.js";
 import { loadSettings, resolveApi } from "./lib/settings.js";
+import { ensureEnvLoaded } from "./lib/env.js";
 import { resolveBaseUrl } from "./lib/uploader.js";
 import { universalMiddleware } from "./lib/universal.js";
 
@@ -64,6 +65,11 @@ export interface RestlessClient {
  *     })));
  */
 function restless(apiKey?: string, opts: ClientOptions = {}): RestlessClient {
+  // If RESTLESS_KEY isn't already in process.env, try to pick it up from a
+  // local `.env` so users don't have to edit their start script. No-op when
+  // the var is already set (their dotenv / --env-file / shell export wins).
+  ensureEnvLoaded();
+
   const resolvedKey =
     apiKey ||
     process.env.RESTLESS_KEY ||
@@ -136,12 +142,10 @@ function restless(apiKey?: string, opts: ClientOptions = {}): RestlessClient {
   return client;
 }
 
-export default restless;
-
-export {
+export default Object.assign(restless, {
   mask,
   newRequestId,
   formatRequestId,
   stripRequestIdPrefix,
   CaptureEngine,
-};
+});

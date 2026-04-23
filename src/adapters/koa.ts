@@ -10,7 +10,7 @@ import {
 } from "./_shared.js";
 import { makeAdapterClient, type AdapterClient } from "../lib/adapterFactory.js";
 
-export function koaMiddleware(handle: SetupHandle) {
+function koaMiddleware(handle: SetupHandle) {
   if (!isSetupHandle(handle)) {
     throw new Error(
       "@restlessai/sdk/koa: expected restless.setup(cb). See README.",
@@ -115,9 +115,11 @@ export function koaMiddleware(handle: SetupHandle) {
 
 type KoaMiddleware = ReturnType<typeof koaMiddleware>;
 
-export default function restlessKoa(
+function restlessKoa(
   apiKey?: string,
   opts: ClientOptions = {},
 ): AdapterClient<KoaMiddleware> {
   return makeAdapterClient(apiKey, opts, (handle) => koaMiddleware(handle));
 }
+
+export default Object.assign(restlessKoa, { middleware: koaMiddleware });

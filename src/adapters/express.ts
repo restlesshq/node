@@ -13,7 +13,7 @@ import {
 import { makeAdapterClient, type AdapterClient } from "../lib/adapterFactory.js";
 
 /** The raw middleware — used internally and exposed for advanced wiring. */
-export function expressMiddleware(handle: SetupHandle) {
+function expressMiddleware(handle: SetupHandle) {
   if (!isSetupHandle(handle)) {
     throw new Error(
       "@restlessai/sdk/express: expected restless.setup(cb). See README.",
@@ -166,9 +166,11 @@ type ExpressMiddleware = ReturnType<typeof expressMiddleware>;
  *     const restless = require('@restlessai/sdk/express')(process.env.RESTLESS_KEY);
  *     app.use(restless.setup((req) => ({ ... })));
  */
-export default function restlessExpress(
+function restlessExpress(
   apiKey?: string,
   opts: ClientOptions = {},
 ): AdapterClient<ExpressMiddleware> {
   return makeAdapterClient(apiKey, opts, (handle) => expressMiddleware(handle));
 }
+
+export default Object.assign(restlessExpress, { middleware: expressMiddleware });

@@ -12,7 +12,7 @@ import {
 import { makeAdapterClient, type AdapterClient } from "../lib/adapterFactory.js";
 
 /** Raw Fastify plugin — exposed for users who prefer `fastify.register(plugin, handle)`. */
-export async function restlessFastifyPlugin(fastify: any, handle: SetupHandle) {
+async function restlessFastifyPlugin(fastify: any, handle: SetupHandle) {
   if (!isSetupHandle(handle)) {
     throw new Error(
       "@restlessai/sdk/fastify: expected restless.setup(cb). See README.",
@@ -141,7 +141,7 @@ type FastifyPlugin = (fastify: any, handle: SetupHandle) => Promise<void>;
  * — Fastify's register accepts `(instance, opts) => Promise<void>` with
  * `opts` bound to the setup handle.
  */
-export default function restlessFastify(
+function restlessFastify(
   apiKey?: string,
   opts: ClientOptions = {},
 ): AdapterClient<FastifyPlugin> {
@@ -149,3 +149,5 @@ export default function restlessFastify(
     return (fastify: any) => restlessFastifyPlugin(fastify, handle);
   });
 }
+
+export default Object.assign(restlessFastify, { plugin: restlessFastifyPlugin });
