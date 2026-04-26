@@ -5,3 +5,4 @@ coverage
 *.log
 .local/
 CLAUDE.md
+publish.sh
