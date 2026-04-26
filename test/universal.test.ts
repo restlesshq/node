@@ -38,7 +38,7 @@ describe("universal middleware: runtime framework detection", () => {
     try {
       const res = await fetch(`http://127.0.0.1:${port}/`);
       expect(res.status).toBe(200);
-      expect(res.headers.get("x-restless-id")).toMatch(/^[0-9a-f-]{36}$/);
+      expect(res.headers.get("x-request-id")).toMatch(/^[0-9a-f-]{36}$/);
       expect(cb).toHaveBeenCalled();
     } finally {
       server.close();
@@ -90,7 +90,7 @@ describe("universal middleware: runtime framework detection", () => {
       /* next */
     });
     expect(cb).toHaveBeenCalled();
-    expect(headers["x-restless-id"]).toBeDefined();
+    expect(headers["x-request-id"]).toBeDefined();
   });
 
   it("detects Hono when called with (c, next) having c.req.raw", async () => {
@@ -115,7 +115,7 @@ describe("universal middleware: runtime framework detection", () => {
       /* next */
     });
     expect(cb).toHaveBeenCalled();
-    expect(honoHeaders["x-restless-id"]).toBeDefined();
+    expect(honoHeaders["x-request-id"]).toBeDefined();
   });
 
   it("detects Next.js wrap when called with a single function argument", async () => {
@@ -131,7 +131,7 @@ describe("universal middleware: runtime framework detection", () => {
       new Request("http://localhost/hi"),
     );
     expect(res.status).toBe(200);
-    expect(res.headers.get("x-restless-id")).toBeDefined();
+    expect(res.headers.get("x-request-id")).toBeDefined();
   });
 
   it("throws a helpful error on an unrecognized call shape", () => {

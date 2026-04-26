@@ -87,10 +87,13 @@ describe("express adapter (one-liner)", () => {
       (_req, res) => res.end("ok"),
       { method: "GET", path: "/" },
     );
-    expect(result.headers["x-restless-id"]).toMatch(
+    // With no incoming x-request-id, we emit x-request-id (the standard
+    // header) carrying our fresh ID. x-restless-id is only used as a
+    // fallback when the chain already has an x-request-id.
+    expect(result.headers["x-request-id"]).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
     );
-    expect(result.headers["x-request-id"]).toBeDefined();
+    expect(result.headers["x-restless-id"]).toBeUndefined();
   });
 
   it("does NOT stomp incoming x-request-id — uses x-restless-id instead", async () => {

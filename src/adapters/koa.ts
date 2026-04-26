@@ -42,6 +42,7 @@ function koaMiddleware(handle: SetupHandle) {
       rawId,
       reqHeaders,
       opts.requestIdPrefix,
+      opts.hasApiKey,
     );
     for (const [k, v] of Object.entries(idHeaders)) ctx.set(k, v);
 

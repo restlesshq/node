@@ -22,29 +22,38 @@ export function isSetupHandle(x: unknown): x is SetupHandle {
 export { newRequestId, formatRequestId };
 
 /**
- * Figure out which response headers carry our request ID.
+ * Figure out which response header carries our request ID.
  *
- * Rule: always emit `x-restless-id` (that one is ours). Also emit
- * `x-request-id` IF the incoming request didn't already have one — we don't
- * stomp a user's existing request-id chain.
+ * Rule: emit `x-request-id` (the standard header everyone knows) carrying
+ * our freshly-generated ID. If the incoming request already has an
+ * `x-request-id` — set by a client, reverse proxy, or upstream middleware
+ * — we don't want to clobber that chain, so we fall back to our own
+ * `x-restless-id` header instead. Exactly one of the two is emitted per
+ * response.
  *
- * We deliberately do NOT read the incoming `x-request-id` and reuse it as
- * our own ID. Our ID is always freshly generated; that way one UUID unambiguously
- * identifies one log, even if upstream proxies are setting their own IDs.
+ * We deliberately do NOT read the incoming `x-request-id` and reuse its
+ * value as our own ID. Our ID is always freshly generated so one UUID
+ * unambiguously identifies one log, even when upstream proxies set their
+ * own IDs under the same name.
+ *
+ * Setup-time signal: when the SDK has no API key resolved (env var was
+ * never set), we emit the literal string `missing-key` as the header
+ * value instead of a UUID. The CLI's setup flow keys off this so it can
+ * tell the user "your server is running but RESTLESS_KEY isn't loaded —
+ * restart it" instead of letting them stare at a request that silently
+ * dropped before upload.
  */
 export function requestIdResponseHeaders(
   ourId: string,
   incomingHeaders: Record<string, string>,
   prefix?: string,
+  hasApiKey: boolean = true,
 ): Record<string, string> {
-  const formatted = formatRequestId(ourId, prefix);
-  const headers: Record<string, string> = {
-    "x-restless-id": formatted,
-  };
-  if (!incomingHeaders["x-request-id"]) {
-    headers["x-request-id"] = formatted;
-  }
-  return headers;
+  const value = hasApiKey ? formatRequestId(ourId, prefix) : "missing-key";
+  const headerName = incomingHeaders["x-request-id"]
+    ? "x-restless-id"
+    : "x-request-id";
+  return { [headerName]: value };
 }
 
 /**

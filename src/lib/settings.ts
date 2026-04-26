@@ -19,7 +19,6 @@ export interface RedactSettings {
 
 export interface ApiSettings {
   version: number;
-  projectId?: string;
   apis: Array<{
     id: string;
     name: string;
@@ -31,6 +30,9 @@ export interface ApiSettings {
     internal?: boolean;
     lastSyncedAt?: string;
     requestIdPrefix?: string;
+    /** The Restless-side project ID this API maps to. Each API in a
+     * monorepo gets its own project, so this lives here, not at the root. */
+    projectId?: string;
     redact?: RedactSettings;
   }>;
 }

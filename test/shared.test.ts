@@ -83,25 +83,24 @@ describe("applyInternalBodyMods", () => {
 });
 
 describe("requestIdResponseHeaders", () => {
-  it("always includes x-restless-id", () => {
-    const h = requestIdResponseHeaders("abc", {});
-    expect(h["x-restless-id"]).toBe("abc");
-  });
-
-  it("also sets x-request-id when none is incoming", () => {
+  it("emits x-request-id when the incoming request has none", () => {
     const h = requestIdResponseHeaders("abc", {});
     expect(h["x-request-id"]).toBe("abc");
+    expect(h["x-restless-id"]).toBeUndefined();
   });
 
-  it("does NOT set x-request-id when the client already sent one", () => {
+  it("falls back to x-restless-id when incoming already has x-request-id", () => {
     const h = requestIdResponseHeaders("abc", { "x-request-id": "upstream" });
-    expect(h["x-request-id"]).toBeUndefined();
     expect(h["x-restless-id"]).toBe("abc");
+    expect(h["x-request-id"]).toBeUndefined();
   });
 
-  it("honors the prefix", () => {
-    const h = requestIdResponseHeaders("abc", {}, "TST");
-    expect(h["x-restless-id"]).toBe("TST-abc");
+  it("honors the prefix on whichever header it emits", () => {
+    const noIncoming = requestIdResponseHeaders("abc", {}, "TST");
+    expect(noIncoming["x-request-id"]).toBe("TST-abc");
+
+    const withIncoming = requestIdResponseHeaders("abc", { "x-request-id": "u" }, "TST");
+    expect(withIncoming["x-restless-id"]).toBe("TST-abc");
   });
 });
 

@@ -118,8 +118,13 @@ export class Uploader {
   getOptions(): {
     baseUrl: string;
     requestIdPrefix: string | undefined;
+    hasApiKey: boolean;
   } {
-    return { baseUrl: this.baseUrl, requestIdPrefix: this.prefix };
+    return {
+      baseUrl: this.baseUrl,
+      requestIdPrefix: this.prefix,
+      hasApiKey: !!this.apiKey,
+    };
   }
 
   push(captured: CapturedRequest) {
@@ -209,8 +214,14 @@ export class Uploader {
       };
     });
 
+    const url = `${this.baseUrl}/v1/request`;
+    if (debugEnabled()) {
+      console.log(
+        `[@restlessai/sdk] uploading ${batch.length} entr${batch.length === 1 ? "y" : "ies"} to ${url}`,
+      );
+    }
     try {
-      const res = await this.fetchImpl(`${this.baseUrl}/v1/request`, {
+      const res = await this.fetchImpl(url, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -225,6 +236,9 @@ export class Uploader {
           );
         }
         return;
+      }
+      if (debugEnabled()) {
+        console.log(`[@restlessai/sdk] upload ok: ${res.status}`);
       }
       // Pass the parsed response body up so the engine can react to
       // server-driven enrichment invalidation + similar signals.

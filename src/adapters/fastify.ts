@@ -11,6 +11,16 @@ import {
 } from "./_shared.js";
 import { makeAdapterClient, type AdapterClient } from "../lib/adapterFactory.js";
 
+/**
+ * Marker Fastify reads on a plugin function: `true` means "skip the
+ * encapsulated scope" so hooks registered inside the plugin apply to the
+ * parent instance. Without this marker, the SDK's `onRequest`/`onSend`
+ * hooks never fire for user-defined routes, which is what `fastify-plugin`
+ * fixes for third-party plugins — we inline the one-symbol equivalent here
+ * to avoid a runtime dep.
+ */
+const skipOverride = Symbol.for("skip-override");
+
 /** Raw Fastify plugin — exposed for users who prefer `fastify.register(plugin, handle)`. */
 async function restlessFastifyPlugin(fastify: any, handle: SetupHandle) {
   if (!isSetupHandle(handle)) {
@@ -50,6 +60,7 @@ async function restlessFastifyPlugin(fastify: any, handle: SetupHandle) {
       rawId,
       reqHeaders,
       opts.requestIdPrefix,
+      opts.hasApiKey,
     );
     for (const [k, v] of Object.entries(idHeaders)) reply.header(k, v);
 
@@ -146,8 +157,14 @@ function restlessFastify(
   opts: ClientOptions = {},
 ): AdapterClient<FastifyPlugin> {
   return makeAdapterClient(apiKey, opts, (handle) => {
-    return (fastify: any) => restlessFastifyPlugin(fastify, handle);
+    const plugin = (fastify: any) => restlessFastifyPlugin(fastify, handle);
+    (plugin as unknown as Record<symbol, unknown>)[skipOverride] = true;
+    return plugin;
   });
 }
+
+// The raw plugin is also exposed as a property; mark it too so
+// `fastify.register(restless.plugin, handle)` works without encapsulation.
+(restlessFastifyPlugin as unknown as Record<symbol, unknown>)[skipOverride] = true;
 
 export default Object.assign(restlessFastify, { plugin: restlessFastifyPlugin });

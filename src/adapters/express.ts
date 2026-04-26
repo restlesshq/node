@@ -58,6 +58,7 @@ function expressMiddleware(handle: SetupHandle) {
       rawId,
       reqHeaders,
       opts.requestIdPrefix,
+      opts.hasApiKey,
     );
     for (const [k, v] of Object.entries(idHeaders)) res.setHeader(k, v);
 

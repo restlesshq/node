@@ -40,6 +40,7 @@ function honoMiddleware(handle: SetupHandle) {
       rawId,
       reqHeaders,
       opts.requestIdPrefix,
+      opts.hasApiKey,
     );
     for (const [k, v] of Object.entries(idHeaders)) c.header(k, v);
 

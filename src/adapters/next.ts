@@ -37,6 +37,7 @@ function nextWrapFactory(handle: SetupHandle) {
           newRequestId(),
           reqHeaders,
           opts.requestIdPrefix,
+          opts.hasApiKey,
         );
         return new Response(JSON.stringify({ error: blocked.message }), {
           status: blocked.status,
@@ -90,6 +91,7 @@ function nextWrapFactory(handle: SetupHandle) {
         rawId,
         reqHeaders,
         opts.requestIdPrefix,
+        opts.hasApiKey,
       );
       for (const [k, v] of Object.entries(idHeaders)) finalHeaders.set(k, v);
       for (const [k, v] of Object.entries(debug.headers)) finalHeaders.set(k, v);
