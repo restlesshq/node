@@ -14,6 +14,7 @@ import {
   truncateBody,
   type RedactOptions,
 } from "./redact.js";
+import { fingerprint } from "./fingerprint.js";
 
 export const MAX_BODY_BYTES = 256 * 1024;
 
@@ -148,6 +149,25 @@ export class CaptureEngine {
         ),
       },
     };
+    // Fingerprint errors only. The server treats an empty fingerprint as
+    // "this was a successful response" and skips error grouping.
+    if (sanitized.response.status >= 400) {
+      let body: unknown = sanitized.response.body;
+      if (typeof body === "string") {
+        try {
+          body = JSON.parse(body);
+        } catch {
+          // leave as string; fingerprint() handles both shapes
+        }
+      }
+      sanitized.errorFingerprint = fingerprint({
+        status: sanitized.response.status,
+        method: sanitized.request.method,
+        route: sanitized.routePattern,
+        responseHeaders: sanitized.response.headers,
+        responseBody: body,
+      });
+    }
     this.uploader.push(sanitized);
   }
 

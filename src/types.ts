@@ -90,6 +90,15 @@ export interface CapturedRequest {
   };
   duration: number;
   user?: UserContext;
+  /**
+   * Stable identifier for an error response, computed at capture time. Set
+   * for status >= 400. See `lib/fingerprint.ts` and `docs/INTERNALS.md`.
+   */
+  errorFingerprint?: {
+    strategy: "header" | "body-code" | "stack" | "message" | "route-only";
+    key: string;
+    reason: string;
+  };
 }
 
 /** Subset of the HAR 1.2 spec we actually emit. */

@@ -123,6 +123,31 @@ When a user is cached-fresh, the upload payload contains just the masked `apiKey
 
 Falsy input returns `undefined` rather than hashing a placeholder. When no `apiKey` and no `projectId` are provided, the log is tagged as anonymous.
 
+## Error fingerprints
+
+`fingerprint()` (in `src/lib/fingerprint.ts`) produces a stable identifier for an HTTP error response. The SDK computes one at capture time and ships it with the log. The metrics server stores it. The site groups by it. Customers attach a "next steps" message to a group, and the SDK looks the message up at runtime to inject it into matching responses.
+
+**This is a cross-SDK contract**, the same way `mask()` is. If the algorithm changes here, every other SDK port (Python, Ruby, PHP, ...) and any stored fingerprints have to move with it. Don't change it in isolation.
+
+Five strategies are tried in priority order; the first that yields a key wins:
+
+| # | strategy     | when it fires                                                       | key shape                            |
+|---|--------------|---------------------------------------------------------------------|--------------------------------------|
+| 1 | `header`     | response has `x-restless-error-code` header (case-insensitive)      | `{status}:{code}`                    |
+| 2 | `body-code`  | response body has `code`, `error_code`, `errorCode`, `type`, or nested `error.code`/`error.type`/`error.error_code` that looks like an identifier (`/^[A-Za-z][\w.\-]*$/`, ≤64 chars) | `{status}:{code}`                    |
+| 3 | `stack`      | `status >= 500` and a stack trace is available; uses the topmost frame that isn't `node_modules`, `node:internal`, or `@restlessai/sdk` | `{status}:{file}:{fn}`               |
+| 4 | `message`    | response body has an extractable `message` (top-level, `error.message`, or string `error`) | `{status}:{method}:{route}:{normalized message}` |
+| 5 | `route-only` | nothing usable                                                       | `{status}:{method}:{route}`          |
+
+Stability rules:
+
+- **No line numbers in stack keys.** The frame is `file:fn`, never `file:line`. Adding a comment above a throw shouldn't ungroup events.
+- **Project-relative file paths.** Anything before `/src/`, `/lib/`, `/app/`, `/api/`, `/routes/`, `/controllers/`, or `/handlers/` is stripped, so `/Users/dev/proj/src/db/users.js` and `/srv/app/src/db/users.js` produce the same key.
+- **Templated routes.** Concrete IDs in the path are replaced before the key is built: numeric segments → `/:id`, RFC 4122 UUIDs → `/:id`, 16+ char hex segments → `/:id`. If the customer already passed a templated route, this is a no-op.
+- **Aggressive message normalization.** The fallback message strategy lowercases, strips URLs / emails / quoted strings, then strips *whole words* containing any digit (so `user_abc123`, `sk_live_4242`, UUID fragments all vanish), then drops residual punctuation and takes the first 6 remaining words joined by `-`. Stripping just digits isn't enough: `abc123` would become `abc` and still influence the key.
+
+The site never re-derives the fingerprint. It reads what the SDK shipped. This avoids the algorithm drifting between two implementations.
+
 ## Request IDs
 
 - Always RFC 4122 v4 UUIDs from `crypto.randomUUID()` (CSPRNG).

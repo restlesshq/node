@@ -189,6 +189,7 @@ export class Uploader {
       return {
         _id: captured.requestId,
         routePattern: captured.routePattern,
+        errorFingerprint: captured.errorFingerprint,
         // Primary grouping key: project.id if provided (so multiple
         // end-users within one project aggregate together), falling back
         // to the individual apiKey.
@@ -207,7 +208,7 @@ export class Uploader {
         request: {
           log: {
             version: "1.2",
-            creator: { name: "@restlessai/sdk", version: "0.2.0" },
+            creator: { name: "@restlessai/sdk", version: __SDK_VERSION__ },
             entries: [entry],
           },
         },

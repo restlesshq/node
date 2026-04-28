@@ -1,4 +1,9 @@
+import { readFileSync } from "node:fs";
 import { defineConfig } from "tsup";
+
+const { version } = JSON.parse(
+  readFileSync(new URL("./package.json", import.meta.url), "utf8"),
+);
 
 export default defineConfig({
   entry: [
@@ -18,4 +23,8 @@ export default defineConfig({
   splitting: false,
   treeshake: true,
   external: ["fastify", "fastify-plugin", "koa", "hono", "next"],
+  // Inline the package.json version at build time so the wire payload's
+  // creator.version always matches the published artifact. See
+  // src/lib/uploader.ts where __SDK_VERSION__ is consumed.
+  define: { __SDK_VERSION__: JSON.stringify(version) },
 });
