@@ -5,34 +5,34 @@ import { CaptureEngine } from "../src/lib/capture.js";
 describe("EnrichCache", () => {
   it("starts empty", () => {
     const c = new EnrichCache();
-    expect(c.isFresh("anything")).toBe(false);
+    expect(c.get("anything")).toBe(null);
     expect(c.size()).toBe(0);
   });
 
-  it("markFresh + isFresh round-trip", () => {
+  it("set + get round-trip", () => {
     const c = new EnrichCache();
-    c.markFresh("key1");
-    expect(c.isFresh("key1")).toBe(true);
-    expect(c.isFresh("key2")).toBe(false);
+    c.set("key1", { label: "Acme" });
+    expect(c.get("key1")).toEqual({ label: "Acme" });
+    expect(c.get("key2")).toBe(null);
   });
 
   it("invalidate clears a single key", () => {
     const c = new EnrichCache();
-    c.markFresh("a");
-    c.markFresh("b");
+    c.set("a", { label: "A" });
+    c.set("b", { label: "B" });
     c.invalidate("a");
-    expect(c.isFresh("a")).toBe(false);
-    expect(c.isFresh("b")).toBe(true);
+    expect(c.get("a")).toBe(null);
+    expect(c.get("b")).toEqual({ label: "B" });
   });
 
   it("expires entries older than TTL", () => {
     const c = new EnrichCache(100);
-    c.markFresh("key1");
-    expect(c.isFresh("key1")).toBe(true);
+    c.set("key1", { label: "x" });
+    expect(c.get("key1")).toEqual({ label: "x" });
     vi.useFakeTimers();
     try {
       vi.advanceTimersByTime(101);
-      expect(c.isFresh("key1")).toBe(false);
+      expect(c.get("key1")).toBe(null);
     } finally {
       vi.useRealTimers();
     }
@@ -76,9 +76,14 @@ describe("CaptureEngine: project.enrich flow", () => {
     expect("enrich" in (first.project || {})).toBe(false);
 
     const second = await engine.resolve({ method: "GET", url: "/", headers: {} });
-    expect(enrich).toHaveBeenCalledTimes(1); // cached
-    // On cached hits the inline project (just id) is what ships
-    expect(second.project).toEqual({ id: "acme-id" });
+    expect(enrich).toHaveBeenCalledTimes(1); // cached — no enrich() call
+    // ...but the cached enriched values still ship every time so the
+    // metrics server doesn't have to backfill from a previous request.
+    expect(second.project).toEqual({
+      id: "acme-id",
+      label: "Acme",
+      email: "a@b.co",
+    });
   });
 
   it("merges inline project fields with enrich() output on first-seen", async () => {
@@ -114,8 +119,9 @@ describe("CaptureEngine: project.enrich flow", () => {
     expect(enrich).toHaveBeenCalledTimes(1);
 
     currentApiKey = "sha512-bbb?0002";
-    await engine.resolve({ method: "GET", url: "/", headers: {} });
+    const second = await engine.resolve({ method: "GET", url: "/", headers: {} });
     expect(enrich).toHaveBeenCalledTimes(1); // same project, no re-run
+    expect(second.project).toEqual({ id: "acme-id", label: "Acme" });
   });
 
   it("re-enriches after server invalidation on project.id", async () => {

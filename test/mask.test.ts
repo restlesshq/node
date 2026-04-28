@@ -25,4 +25,21 @@ describe("mask()", () => {
     expect(mask(undefined)).toBeUndefined();
     expect(mask(null)).toBeUndefined();
   });
+
+  it("treats setup-time placeholder strings as no key", () => {
+    // Anyone running our example curl without replacing the placeholder
+    // shouldn't land in the masked-key list. The CLI's curl ships
+    // `Bearer API_KEY_HERE` by default; the others are common in
+    // copy-pasted docs.
+    expect(mask("API_KEY_HERE")).toBeUndefined();
+    expect(mask("YOUR_API_KEY")).toBeUndefined();
+    expect(mask("YOUR_KEY")).toBeUndefined();
+    expect(mask("REPLACE_ME")).toBeUndefined();
+  });
+
+  it("is idempotent — mask(mask(x)) === mask(x)", () => {
+    const once = mask("rdme_abc123wxyz");
+    expect(once).toBeDefined();
+    expect(mask(once)).toBe(once);
+  });
 });

@@ -82,20 +82,28 @@ export class CaptureEngine {
     const { enrich, ...inlineProject } = rawProject;
     const cacheKey = rawProject.id || rest.apiKey;
 
-    // Run enrich lazily if we have a key to cache under and it's stale
-    if (
-      typeof enrich === "function" &&
-      rawProject.id &&
-      cacheKey &&
-      !this.enrichCache.isFresh(cacheKey)
-    ) {
-      try {
-        const enriched = await enrich(rawProject.id);
-        this.enrichCache.markFresh(cacheKey);
+    // We cache the enriched VALUE (not just a freshness marker) so
+    // every upload carries user metadata, even when we skip running
+    // the (potentially expensive) enrich callback. Without this every
+    // request after the first would land in the dashboard as
+    // "unauthenticated", since the server has no way to backfill.
+    if (typeof enrich === "function" && rawProject.id && cacheKey) {
+      const cached = this.enrichCache.get(cacheKey);
+      if (cached) {
         return {
           ...rest,
-          project: { ...inlineProject, ...enriched },
+          project: { ...inlineProject, ...cached },
         } as ResolvedSetup;
+      }
+      try {
+        const enriched = await enrich(rawProject.id);
+        if (enriched && typeof enriched === "object") {
+          this.enrichCache.set(cacheKey, enriched as Record<string, unknown>);
+          return {
+            ...rest,
+            project: { ...inlineProject, ...enriched },
+          } as ResolvedSetup;
+        }
       } catch {
         // Enrichment failure must not break the request path.
       }

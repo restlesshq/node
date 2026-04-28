@@ -65,16 +65,16 @@ export interface RestlessClient {
  *     })));
  */
 function restless(apiKey?: string, opts: ClientOptions = {}): RestlessClient {
-  // If RESTLESS_KEY isn't already in process.env, try to pick it up from a
-  // local `.env` so users don't have to edit their start script. No-op when
-  // the var is already set (their dotenv / --env-file / shell export wins).
-  ensureEnvLoaded();
-
-  const resolvedKey =
-    apiKey ||
-    process.env.RESTLESS_KEY ||
-    process.env.README_API_KEY ||
-    "";
+  // Explicit key wins. Only fall back to the .env walk if nothing was passed
+  // and process.env doesn't already have it; otherwise we'd touch the
+  // filesystem (and pull unrelated vars into process.env) unnecessarily.
+  let resolvedKey =
+    apiKey || process.env.RESTLESS_KEY || process.env.README_API_KEY;
+  if (!resolvedKey) {
+    ensureEnvLoaded();
+    resolvedKey =
+      process.env.RESTLESS_KEY || process.env.README_API_KEY || "";
+  }
 
   // Read .api/settings.json for per-API config: the requestIdPrefix and the
   // redact lists. We no longer auto-populate a project on the SetupResult:
