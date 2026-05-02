@@ -64,6 +64,61 @@ describe("universal middleware: runtime framework detection", () => {
     expect(hooks.onSend).toHaveLength(1);
   });
 
+  it("marks the polymorphic with skip-override so Fastify doesn't encapsulate", () => {
+    // Without this symbol, fastify.register(restless.setup(cb)) creates an
+    // encapsulated child scope. The plugin runs and adds onRequest/onSend
+    // hooks, but those hooks attach to the child — not the parent where
+    // user routes live. Result: hooks never fire, no logs ever ship.
+    // See node-sdk/src/lib/universal.ts and the matching markers on the
+    // dedicated Fastify adapter (src/adapters/fastify.ts).
+    const client = mkClient();
+    const mw = client.setup(() => ({ apiKey: "k" }));
+    expect((mw as unknown as Record<symbol, unknown>)[Symbol.for("skip-override")]).toBe(true);
+  });
+
+  it("simulates Fastify's encapsulation check end-to-end", async () => {
+    // Stronger test: model what real Fastify does with the skip-override
+    // symbol. If a plugin has it, hooks register on the parent. If not,
+    // they register on a child scope that never sees user routes. Then
+    // simulate a request and assert the SDK callback fired.
+    const client = mkClient();
+    const cb = vi.fn().mockReturnValue({ apiKey: "k" });
+    const mw = client.setup(cb);
+
+    const parentHooks: Record<string, Function[]> = {};
+    const childHooks: Record<string, Function[]> = {};
+
+    const makeInstance = (target: Record<string, Function[]>) => ({
+      addHook: (name: string, fn: Function) => {
+        target[name] ||= [];
+        target[name]!.push(fn);
+      },
+      decorateRequest: () => {},
+    });
+
+    const parent = makeInstance(parentHooks);
+    const child = makeInstance(childHooks);
+
+    // The mini-Fastify dispatcher: skip-override → parent, else → child.
+    const useParent =
+      ((mw as unknown) as Record<symbol, unknown>)[Symbol.for("skip-override")] === true;
+    await (mw as any)(useParent ? parent : child);
+
+    expect(parentHooks.onRequest).toHaveLength(1);
+    expect(childHooks.onRequest).toBeUndefined();
+
+    // Now fire a "user route" request through the parent's onRequest hook.
+    // If the SDK's hook registered on the child it would never run here.
+    const fakeReq: any = {
+      headers: { host: "localhost", "x-test": "1" },
+      raw: { socket: {}, method: "GET", url: "/hi" },
+      url: "/hi",
+    };
+    const fakeReply: any = { header: () => {}, code: () => fakeReply };
+    await parentHooks.onRequest![0]!(fakeReq, fakeReply);
+    expect(cb).toHaveBeenCalled();
+  });
+
   it("detects Koa when called with (ctx, next) having ctx.request + ctx.response", async () => {
     const client = mkClient();
     const cb = vi.fn().mockReturnValue({ apiKey: "k" });

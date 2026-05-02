@@ -31,6 +31,14 @@ const restlessFastifyPlugin = (fastify: any, handle: SetupHandle) =>
  *   fn(fastify, opts, done?)    → Fastify plugin (fastify.addHook)
  *   fn(handler)                 → Next.js App Router / generic HOF wrap
  */
+// Marker Fastify reads on a plugin function: `true` means "skip the
+// encapsulated scope" so hooks registered inside the plugin apply to the
+// parent instance. Without it, the SDK's onRequest/onSend hooks attach to a
+// child scope and never fire on the user's routes — the symptom is "logs
+// silently never send." Mirrors the same marker on the Fastify-specific
+// adapter; harmless for non-Fastify frameworks since they don't read it.
+const skipOverride = Symbol.for("skip-override");
+
 export function universalMiddleware(handle: SetupHandle) {
   // Lazily build each adapter the first time it's needed. Keeps startup
   // minimal while still sharing state across requests of the same flavor.
@@ -39,7 +47,7 @@ export function universalMiddleware(handle: SetupHandle) {
   let hono: ReturnType<typeof honoMiddleware> | null = null;
   let nextWrap: ReturnType<typeof nextWrapFactory> | null = null;
 
-  return function polymorphic(...args: unknown[]): unknown {
+  const polymorphic = function polymorphic(...args: unknown[]): unknown {
     const first = args[0];
 
     // Single-arg, function: Next.js route handler or generic HOF wrap.
@@ -100,4 +108,6 @@ export function universalMiddleware(handle: SetupHandle) {
         "If you're using a less-common framework, import the specific adapter (e.g. '@restlessai/sdk/express') and call restless.setup(cb) through it.",
     );
   };
+  (polymorphic as unknown as Record<symbol, unknown>)[skipOverride] = true;
+  return polymorphic;
 }
