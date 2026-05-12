@@ -5,6 +5,8 @@ import type {
   CapturedRequest,
   UserContext,
   HarEntry,
+  OwnerDetails,
+  OwnerSetup,
   ProjectDetails,
   ProjectSetup,
 } from "./types.js";
@@ -17,7 +19,7 @@ import {
 } from "./lib/requestId.js";
 import { loadSettings, resolveApi } from "./lib/settings.js";
 import { ensureEnvLoaded } from "./lib/env.js";
-import { resolveBaseUrl } from "./lib/uploader.js";
+import { resolveBaseUrl, isTestRun } from "./lib/uploader.js";
 import { universalMiddleware } from "./lib/universal.js";
 
 export type {
@@ -27,6 +29,8 @@ export type {
   CapturedRequest,
   UserContext,
   HarEntry,
+  OwnerDetails,
+  OwnerSetup,
   ProjectDetails,
   ProjectSetup,
 };
@@ -58,10 +62,10 @@ export interface RestlessClient {
 /**
  * Construct a restless client.
  *
- *     const restless = require('@restlessai/sdk/express')(process.env.RESTLESS_KEY);
+ *     const restless = require('@restlessai/sdk')(process.env.RESTLESS_KEY);
  *     app.use(restless.setup((req) => ({
- *       apiKey:    restless.mask(req.headers.authorization),
- *       projectId: req.headers['x-tenant-id'],
+ *       apiKey: restless.mask(req.headers.authorization),
+ *       owner: { id: req.user.workspaceId },
  *     })));
  */
 function restless(apiKey?: string, opts: ClientOptions = {}): RestlessClient {
@@ -76,9 +80,15 @@ function restless(apiKey?: string, opts: ClientOptions = {}): RestlessClient {
       process.env.RESTLESS_KEY || process.env.README_API_KEY || "";
   }
 
-  // Read .api/settings.json for per-API config: the requestIdPrefix and the
-  // redact lists. We no longer auto-populate a project on the SetupResult:
-  // projectId is now a customer/tenant concept the user supplies per-request.
+  if (!resolvedKey && !isTestRun()) {
+    console.warn(
+      "[@restlessai/sdk] no API key found — set RESTLESS_KEY in your environment or pass it to restless(). Captured requests will not be uploaded.",
+    );
+  }
+
+  // Read .restless/settings.json for per-API config: the requestIdPrefix and the
+  // redact lists. We no longer auto-populate an owner on the SetupResult:
+  // owner.id is now a customer/tenant concept the user supplies per-request.
   let requestIdPrefix: string | undefined;
   let settingsRedact: ClientOptions["redact"] | undefined;
   try {

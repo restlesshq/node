@@ -10,7 +10,7 @@ import {
 
 function makeSettingsDir(contents: unknown): string {
   const dir = mkdtempSync(join(tmpdir(), "restless-settings-"));
-  const api = join(dir, ".api");
+  const api = join(dir, ".restless");
   mkdirSync(api);
   writeFileSync(join(api, "settings.json"), JSON.stringify(contents));
   return dir;
@@ -19,7 +19,7 @@ function makeSettingsDir(contents: unknown): string {
 describe("settings loader", () => {
   beforeEach(() => _resetSettingsCache());
 
-  it("walks up to find .api/settings.json", () => {
+  it("walks up to find .restless/settings.json", () => {
     const dir = makeSettingsDir({
       version: 1,
       apis: [{ id: "abc", name: "Test" }],

@@ -46,12 +46,14 @@ The import is the same for every framework — `@restlessai/sdk` auto-detects th
 const restless = require('@restlessai/sdk')(process.env.RESTLESS_KEY);
 ```
 
+All examples below use `req.user.workspaceId` as a placeholder for the customer's stable, immutable internal id. Replace it with whatever your auth middleware attaches: a workspace uuid, tenant id, or user pk. See [§4.1](#the-owner-block) for how to pick.
+
 ### Express
 
 ```js
 app.use(restless.setup((req) => ({
   apiKey: restless.mask(req.headers.authorization),
-  project: { id: req.headers['x-tenant-id'] },
+  owner: { id: req.user.workspaceId },
 })));
 ```
 
@@ -62,7 +64,7 @@ app.use(restless.setup((req) => ({
 ```js
 await fastify.register(restless.setup((req) => ({
   apiKey: restless.mask(req.headers.authorization),
-  project: { id: req.headers['x-tenant-id'] },
+  owner: { id: req.user.workspaceId },
 })));
 ```
 
@@ -71,7 +73,7 @@ await fastify.register(restless.setup((req) => ({
 ```js
 app.use(restless.setup((ctx) => ({
   apiKey: restless.mask(ctx.request.headers.authorization),
-  project: { id: ctx.request.headers['x-tenant-id'] },
+  owner: { id: ctx.state.user.workspaceId },
 })));
 ```
 
@@ -80,7 +82,7 @@ app.use(restless.setup((ctx) => ({
 ```js
 app.use(restless.setup((c) => ({
   apiKey: restless.mask(c.req.header('authorization')),
-  project: { id: c.req.header('x-tenant-id') },
+  owner: { id: c.get('user').workspaceId },
 })));
 ```
 
@@ -93,9 +95,9 @@ export const client = restless(process.env.RESTLESS_KEY!);
 
 // app/api/hello/route.ts
 import { client } from '../../lib/restless';
-const wrap = client.setup((req) => ({
+const wrap = client.setup(async (req) => ({
   apiKey: client.mask(req.headers.get('authorization')),
-  project: { id: req.headers.get('x-tenant-id') },
+  owner: { id: (await getSessionUser(req)).workspaceId },
 }));
 export const GET  = wrap(async () => Response.json({ ok: true }));
 export const POST = wrap(async () => Response.json({ ok: true }));
@@ -126,25 +128,37 @@ Signature (all frameworks normalize to this shape):
 | field      | type                                         | required | notes                                                                     |
 |------------|----------------------------------------------|----------|---------------------------------------------------------------------------|
 | `apiKey`   | `string \| undefined`                        | no       | Masked key from `restless.mask()`. Never pass plaintext.                  |
-| `project`  | `ProjectSetup`                               | no       | Project / customer / org this user belongs to. See below.                 |
+| `owner`    | `OwnerSetup`                                 | yes\*    | The workspace / tenant / end-user this request belongs to. See below.     |
 | `block`    | `true \| { status?, message? }`              | no       | Rejects the request with 403 (or custom status). Handler never runs.      |
+
+\* `owner` is technically optional, but omitting it lands every log in the dashboard as "anonymous". Set it unless this API has truly no concept of identity.
 
 Extra top-level fields are preserved and stored on the log.
 
-### The `project` block
+### The `owner` block
 
-Everything related to the customer/org this user belongs to lives here. The SDK treats it as one unit: cheap fields are sent every request; `enrich` runs only on first-seen per id.
+`owner.id` is the **permanent, immutable identifier** the dashboard uses to group every log this customer ever produces. Once set, do not change it: the value gets sent to Restless on every request, and the dashboard pins a project's history to it. Misconfiguring this is the single biggest setup mistake.
+
+**Picking `owner.id`:**
+
+| API shape                                    | Use as `id`                                             |
+|----------------------------------------------|---------------------------------------------------------|
+| Multi-tenant SaaS (workspaces, orgs, teams)  | The tenant's stable internal id (uuid / pk)             |
+| Per-user API (one key per developer)         | The user's stable internal id (uuid / pk)               |
+| Anonymous / no identity model                | Omit `owner` entirely; every log lands as anonymous     |
+
+**Never use any of these as `owner.id`:** an API key (rotatable, also a secret), an email address (changeable), a username, a JWT, or any other value that can change for the same customer. If it can rotate, it's wrong.
 
 ```ts
-interface ProjectSetup {
-  id?:     string;                // cheap, required when using enrich
+interface OwnerSetup {
+  id:      string;                // permanent, immutable (see above)
   label?:  string;                // cheap inline
   email?:  string | string[];     // cheap inline
-  enrich?: (id: string) => ProjectDetails | Promise<ProjectDetails>;  // lazy
+  enrich?: (id: string) => OwnerDetails | Promise<OwnerDetails>;  // lazy
   [key: string]: unknown;
 }
 
-interface ProjectDetails {
+interface OwnerDetails {
   label?: string;
   email?: string | string[];
   [key: string]: unknown;
@@ -153,27 +167,27 @@ interface ProjectDetails {
 
 ### What's cheap vs expensive
 
-Top-level `apiKey` and all inline fields under `project` (id, label, email, whatever extras you add) are **cheap** — included on every request.
+Top-level `apiKey` and all inline fields under `owner` (id, label, email, whatever extras you add) are **cheap** and included on every request.
 
-`project.enrich(id)` is **expensive** — the SDK calls it only on the first request from each `project.id`, then caches until the server asks for a refresh.
+`owner.enrich(id)` is **expensive**. The SDK calls it only on the first request from each `owner.id`, then caches until the server asks for a refresh.
 
-### Lazy project enrichment
+### Lazy owner enrichment
 
 ```js
 restless.setup((req) => ({
   apiKey: restless.mask(req.headers.authorization),
 
-  project: {
-    id: req.headers['x-tenant-id'],
+  owner: {
+    id: req.user.workspaceId,
 
-    // Only runs when the server hasn't confirmed it has this project yet.
+    // Only runs when the server hasn't confirmed it has this owner yet.
     // Receives the id as an argument (has access to req via closure too).
     enrich: async (id) => {
-      const org = await db.orgs.findById(id);
+      const workspace = await db.workspaces.findById(id);
       return {
-        label: org.name,
-        email: org.contactEmail,      // single string OR string[]
-        plan:  org.plan,              // any extra fields are preserved
+        label: workspace.name,
+        email: workspace.adminEmails,  // single string OR string[]
+        plan:  workspace.plan,         // any extra fields are preserved
       };
     },
   },
@@ -182,10 +196,10 @@ restless.setup((req) => ({
 
 Behavior:
 
-- Cached by `project.id`. First request from each project triggers `enrich`; subsequent requests skip it.
-- If the server responds to an upload with `needsEnrichment: [<project.id>]`, that project is invalidated and the next request from it re-runs `enrich`.
+- Cached by `owner.id`. First request from each owner triggers `enrich`; subsequent requests skip it.
+- If the server responds to an upload with `needsEnrichment: [<owner.id>]`, that owner is invalidated and the next request from it re-runs `enrich`.
 - `enrich` errors are swallowed. The log still ships with the inline fields.
-- `enrich` runs only when `project.id` is set (there's nothing to cache under otherwise).
+- `enrich` runs only when `owner.id` is set (there's nothing to cache under otherwise).
 - Inline fields (`label`, `email` outside `enrich`) are sent on every request, so they survive cache hits even if `enrich` never fires.
 
 ## 5. The `mask()` gotcha
@@ -202,7 +216,7 @@ apiKey: restless.mask(req.headers.authorization || 'anonymous')
 
 `mask()` returns `undefined` on falsy input. The SDK handles it. Don't substitute.
 
-## 6. `.api/settings.json`
+## 6. `.restless/settings.json`
 
 The SDK auto-reads this file at startup (walking up from cwd). Created and owned by the `api` CLI (`npx api setup`). Schema:
 
@@ -215,7 +229,7 @@ The SDK auto-reads this file at startup (walking up from cwd). Created and owned
       "id": "<api uuid>",
       "name": "Public API",
       "rootDir": ".",
-      "oasFile": ".api/openapi.yaml",
+      "oasFile": ".restless/openapi.yaml",
       "framework": "express",
       "language": "javascript",
       "baseUrl": "https://api.example.com",
@@ -262,7 +276,7 @@ Matching is case-insensitive AND ignores `-`/`_`, so `api_key` / `apiKey` / `API
 
 Two additive sources, both merged with the defaults:
 
-1. **`.api/settings.json` → `apis[].redact`** (populated by `npx api setup` via the `detect-auth` step, which scans the OAS `components.securitySchemes` + source code for custom auth mechanisms)
+1. **`.restless/settings.json` → `apis[].redact`** (populated by `npx api setup` via the `detect-auth` step, which scans the OAS `components.securitySchemes` + source code for custom auth mechanisms)
 2. **`opts.redact`** (per-process, passed at construction):
    ```js
    restless(key, { redact: { headers: ['x-custom'], bodyKeys: ['apiSecret'] } });
@@ -337,7 +351,7 @@ Upload failures are swallowed. With `DEBUG=restless` they log to stderr. Observa
 
 ```ts
 interface ClientOptions {
-  /** Name of the API in .api/settings.json. Required when >1 API is defined. */
+  /** Name of the API in .restless/settings.json. Required when >1 API is defined. */
   api?: string;
 
   /** Extend the redaction denylists. Merged additively with defaults. */
@@ -349,7 +363,7 @@ interface ClientOptions {
 }
 ```
 
-`apiKey` falls back to `process.env.RESTLESS_KEY` → `process.env.README_API_KEY`. Everything else lives in env vars or `.api/settings.json`. There are no other public options.
+`apiKey` falls back to `process.env.RESTLESS_KEY` → `process.env.README_API_KEY`. Everything else lives in env vars or `.restless/settings.json`. There are no other public options.
 
 ## 14. Common mistakes (don't do these)
 
@@ -367,5 +381,5 @@ interface ClientOptions {
 1. `grep -r "@restlessai/sdk" --include="*.{js,ts,mjs,cjs}" -l .` returns your server entry file.
 2. `@restlessai/sdk` appears in `package.json#dependencies`.
 3. The middleware/plugin is registered BEFORE route definitions.
-4. `.api/settings.json` exists (created by `npx api setup`).
+4. `.restless/settings.json` exists (created by `npx api setup`).
 5. Starting the server and curling any endpoint prints an `x-restless-id` header in the response.

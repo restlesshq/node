@@ -25,18 +25,21 @@ const restless = require('@restlessai/sdk')(process.env.RESTLESS_KEY);
 
 app.use(restless.setup((req) => ({
   apiKey: restless.mask(req.headers.authorization),
-  project: {
-    id: /* this user's unique project id */,
+  owner: {
+    // `id` is permanent and immutable. Pick a stable internal identifier
+    // (workspace id, tenant uuid, user pk). Never an API key, email, or
+    // anything else that can change for the same customer.
+    id: /* this customer's stable, immutable internal id */,
     enrich: async (id) => {
-      // Lazy-resolved: runs once per project id, then cached.
+      // Lazy-resolved: runs once per owner id, then cached.
       // Fill in with your own lookup (DB, JWT, API, etc.).
       //
-      //   const project = await db.projects.findById(id);
+      //   const workspace = await db.workspaces.findById(id);
 
       return {
         /*
-          label: project.name,
-          email: project.email,  // email or array of emails
+          label: workspace.name,
+          email: workspace.adminEmails,  // string or string[]
         */
       };
     },
@@ -60,7 +63,7 @@ Full per-framework examples are in [`install.md`](./install.md).
 ## What you get
 
 - **One line of setup.** The factory returns a client; `setup(cb)` gives you framework-ready middleware back.
-- **Lazy project enrichment.** Expensive DB lookups for project metadata (display name, contact emails, plan tier) run only on the first request from each project, then cache until the server asks for a refresh. 100 requests from the same project don't hit your database 100 times.
+- **Lazy owner enrichment.** Expensive DB lookups for owner metadata (display name, contact emails, plan tier) run only on the first request from each owner id, then cache until the server asks for a refresh. 100 requests from the same workspace don't hit your database 100 times.
 - **Safe by default.** Headers like `Authorization` / `Cookie` and body fields like `password` / `token` / `ssn` are redacted before anything leaves your server. The redaction list extends itself from your OpenAPI spec: the `npx api setup` flow scans your auth mechanisms and flags custom fields automatically.
 - **Error-triage built in.** 4xx / 5xx responses get an `x-log-url` header and a `debug` block in the JSON body so you can jump straight to the captured log.
 - **Blocking.** Return `{ block: true }` from the setup callback to reject a request with a 403 before your handler runs.

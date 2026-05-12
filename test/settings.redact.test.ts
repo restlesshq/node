@@ -7,7 +7,7 @@ import { _resetSettingsCache, resolveApi } from "../src/lib/settings.js";
 
 function makeSettingsDir(contents: unknown): string {
   const dir = mkdtempSync(join(tmpdir(), "restless-redact-"));
-  const api = join(dir, ".api");
+  const api = join(dir, ".restless");
   mkdirSync(api);
   writeFileSync(join(api, "settings.json"), JSON.stringify(contents));
   return dir;

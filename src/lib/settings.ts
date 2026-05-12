@@ -2,7 +2,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
 /**
- * Shape of `.api/settings.json` — created and owned by the `api` CLI
+ * Shape of `.restless/settings.json` — created and owned by the `api` CLI
  * (`npx api setup`). See `install.md` for the full schema.
  */
 /**
@@ -45,7 +45,7 @@ export interface ApiEntry {
 }
 
 /**
- * Walk up from `startDir` looking for `.api/settings.json`, the same way
+ * Walk up from `startDir` looking for `.restless/settings.json`, the same way
  * tsconfig / package.json resolution works. Returns null if none is found
  * before we hit the filesystem root.
  */
@@ -53,7 +53,7 @@ function findSettingsFile(startDir: string): string | null {
   let dir = resolve(startDir);
   // Bounded loop — stop when dirname no longer changes (we're at /)
   while (true) {
-    const candidate = join(dir, ".api", "settings.json");
+    const candidate = join(dir, ".restless", "settings.json");
     if (existsSync(candidate)) return candidate;
     const parent = dirname(dir);
     if (parent === dir) return null;

@@ -1,6 +1,6 @@
 import type {
   CapturedRequest,
-  ProjectDetails,
+  OwnerDetails,
   SetupCallback,
   SetupResult,
 } from "../types.js";
@@ -22,10 +22,16 @@ export interface EngineConfig extends Omit<UploaderConfig, "onResponse"> {
   redact?: RedactOptions;
 }
 
-/** Shape `engine.resolve()` returns — the setup result with project merged + enriched. */
+/**
+ * Shape `engine.resolve()` returns: the setup result with owner merged + enriched.
+ *
+ * Note the wire-format field is still `project` (server-coupled). The user
+ * supplies `owner` in their callback; `resolve()` normalizes either `owner`
+ * or the legacy `project` alias to this internal shape.
+ */
 export interface ResolvedSetup {
   apiKey?: string;
-  project?: ProjectDetails & { id?: string };
+  project?: OwnerDetails & { id?: string };
   block?: SetupResult["block"];
   [key: string]: unknown;
 }
@@ -52,8 +58,8 @@ export class CaptureEngine {
   }
 
   /**
-   * Server can respond with `{ needsEnrichment: [<projectId>...] }` to force
-   * re-running `enrich` on the next request from that project.
+   * Server can respond with `{ needsEnrichment: [<ownerId>...] }` to force
+   * re-running `enrich` on the next request from that owner.
    */
   private handleServerResponse(body: unknown): void {
     if (!body || typeof body !== "object") return;
@@ -74,35 +80,39 @@ export class CaptureEngine {
       return {};
     }
 
-    const { project: rawProject, ...rest } = result;
-    if (!rawProject) {
-      // No project → just apiKey + anything else
+    // Accept either `owner` (preferred) or `project` (legacy alias).
+    // `owner` wins when both are supplied so a caller mid-migration can
+    // safely add the new field without ripping out the old one yet.
+    const { owner: rawOwner, project: rawProject, ...rest } = result;
+    const raw = rawOwner || rawProject;
+    if (!raw) {
+      // No owner → just apiKey + anything else.
       return rest as ResolvedSetup;
     }
 
-    const { enrich, ...inlineProject } = rawProject;
-    const cacheKey = rawProject.id || rest.apiKey;
+    const { enrich, ...inlineOwner } = raw;
+    const cacheKey = raw.id || rest.apiKey;
 
     // We cache the enriched VALUE (not just a freshness marker) so
     // every upload carries user metadata, even when we skip running
     // the (potentially expensive) enrich callback. Without this every
     // request after the first would land in the dashboard as
     // "unauthenticated", since the server has no way to backfill.
-    if (typeof enrich === "function" && rawProject.id && cacheKey) {
+    if (typeof enrich === "function" && raw.id && cacheKey) {
       const cached = this.enrichCache.get(cacheKey);
       if (cached) {
         return {
           ...rest,
-          project: { ...inlineProject, ...cached },
+          project: { ...inlineOwner, ...cached },
         } as ResolvedSetup;
       }
       try {
-        const enriched = await enrich(rawProject.id);
+        const enriched = await enrich(raw.id);
         if (enriched && typeof enriched === "object") {
           this.enrichCache.set(cacheKey, enriched as Record<string, unknown>);
           return {
             ...rest,
-            project: { ...inlineProject, ...enriched },
+            project: { ...inlineOwner, ...enriched },
           } as ResolvedSetup;
         }
       } catch {
@@ -110,7 +120,7 @@ export class CaptureEngine {
       }
     }
 
-    return { ...rest, project: inlineProject } as ResolvedSetup;
+    return { ...rest, project: inlineOwner } as ResolvedSetup;
   }
 
   /** Redact + truncate, then enqueue. */

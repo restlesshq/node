@@ -1,26 +1,35 @@
 /**
- * Fully-resolved project data that goes on the wire. Inline fields from the
- * user's `setup` callback plus anything their `project.enrich(id)` returned,
+ * Fully-resolved owner data that goes on the wire. Inline fields from the
+ * user's `setup` callback plus anything their `owner.enrich(id)` returned,
  * merged together.
  */
-export interface ProjectDetails {
+export interface OwnerDetails {
   /** Human-readable display label for the dashboard. */
   label?: string;
-  /** Contact email(s) associated with this project. A single string or an array. */
+  /** Contact email(s) associated with this owner. A single string or an array. */
   email?: string | string[];
   [key: string]: unknown;
 }
 
 /**
- * What the user puts under `project:` in their setup callback.
+ * What the user puts under `owner:` in their setup callback.
  *
- * `id` is the cheap, stable identifier (sent every request, used as the
- * caching key). `label`, `email`, etc. are optional cheap inline fields.
+ * `id` is the PERMANENT, IMMUTABLE identifier for the workspace / tenant /
+ * end-user this request belongs to. The Restless dashboard pins a project's
+ * entire log history to this value. Once a customer has started producing
+ * logs under one id, changing it fragments their history. Pick something
+ * that will never change: a database primary key, a workspace UUID, a user
+ * id. Never an API key, an email, a username, or any other rotatable value.
+ *
+ * `label`, `email`, etc. are optional cheap inline fields.
  * `enrich(id)` is an optional async resolver for expensive lookups; it's
- * only called on the first request from each project id, then cached.
+ * only called on the first request from each id, then cached.
  */
-export interface ProjectSetup {
-  /** Stable identifier for the project/customer. Cached under this. */
+export interface OwnerSetup {
+  /**
+   * Permanent, immutable identifier. **Must never change for this owner.**
+   * See the interface docstring for picking guidance.
+   */
   id?: string;
 
   /** Cheap inline fields. Included on every request. */
@@ -28,23 +37,35 @@ export interface ProjectSetup {
   email?: string | string[];
 
   /**
-   * Lazy resolver for expensive project metadata (DB lookup, JWT verification,
-   * external HTTP call). Receives the project id as an argument. Runs only
+   * Lazy resolver for expensive owner metadata (DB lookup, JWT verification,
+   * external HTTP call). Receives the owner id as an argument. Runs only
    * on the first request from each id (or after server-driven invalidation),
-   * then cached. Return any additional fields to merge into the project.
+   * then cached. Return any additional fields to merge into the owner.
    */
-  enrich?: (id: string) => ProjectDetails | Promise<ProjectDetails>;
+  enrich?: (id: string) => OwnerDetails | Promise<OwnerDetails>;
 
   /** Any extra fields are preserved on the log. */
   [key: string]: unknown;
 }
 
+/**
+ * @deprecated Use `OwnerDetails`. Retained as an alias so existing imports
+ * keep compiling; new code should reference `OwnerDetails`.
+ */
+export type ProjectDetails = OwnerDetails;
+
+/**
+ * @deprecated Use `OwnerSetup`. Retained as an alias so existing imports
+ * keep compiling; new code should reference `OwnerSetup`.
+ */
+export type ProjectSetup = OwnerSetup;
+
 /** Per-request user context stored on each captured log. */
 export interface UserContext {
   /** Masked end-user API key. */
   apiKey?: string;
-  /** Resolved project: `id` plus cheap inline fields plus anything `enrich` returned. */
-  project?: ProjectDetails & { id?: string };
+  /** Resolved owner: `id` plus cheap inline fields plus anything `enrich` returned. */
+  project?: OwnerDetails & { id?: string };
   [key: string]: unknown;
 }
 
@@ -52,18 +73,24 @@ export interface UserContext {
  * What the user returns from `setup(cb)` on every request.
  *
  * Keep top-level fields CHEAP (straight from the request — header, cookie,
- * JWT claim). Put anything expensive inside `project.enrich(id)`; the SDK
- * calls it lazily and dedups by project id.
+ * JWT claim). Put anything expensive inside `owner.enrich(id)`; the SDK
+ * calls it lazily and dedups by owner id.
  */
 export interface SetupResult {
   /** Mask end-user API key with `restless.mask(...)`. Never pass plaintext. */
   apiKey?: string;
 
   /**
-   * The project / customer / org this user belongs to. `project.id` is the
-   * grouping dimension on the dashboard. Optional for single-tenant apps.
+   * The workspace / tenant / end-user this request belongs to. `owner.id`
+   * is the permanent grouping dimension on the dashboard.
    */
-  project?: ProjectSetup;
+  owner?: OwnerSetup;
+
+  /**
+   * @deprecated Use `owner`. Accepted as an alias for backwards compatibility
+   * with code wired before the rename; if both are provided, `owner` wins.
+   */
+  project?: OwnerSetup;
 
   /** Reject this request with a 4xx before the handler runs. */
   block?: boolean | { status?: number; message?: string };
@@ -140,7 +167,7 @@ export type SetupCallback<TReq = any> = (
 
 /** Public options for `restless(apiKey, opts?)`. */
 export interface ClientOptions {
-  /** Name of the API in `.api/settings.json`. Required when >1 API is defined. */
+  /** Name of the API in `.restless/settings.json`. Required when >1 API is defined. */
   api?: string;
 
   /** Extend the redaction denylists (merged with built-in defaults). */

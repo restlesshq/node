@@ -34,7 +34,7 @@ export function resolveBaseUrl(explicit?: string): string {
  * can key on — users in those environments should set `NODE_ENV=test`
  * themselves (which is already the recommended practice for both).
  */
-function isTestRun(): boolean {
+export function isTestRun(): boolean {
   if (process.env.NODE_ENV === "test") return true;
   if (process.env.VITEST === "true") return true;
   if (process.env.JEST_WORKER_ID !== undefined) return true;

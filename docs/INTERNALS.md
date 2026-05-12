@@ -4,7 +4,7 @@ Details that don't belong in the main README. Useful if you're debugging, self-h
 
 ## Settings resolution
 
-On construction, `restless()` walks up from the current working directory looking for `.api/settings.json`. The file is owned by the `api/` CLI and looks like:
+On construction, `restless()` walks up from the current working directory looking for `.restless/settings.json`. The file is owned by the `api/` CLI and looks like:
 
 ```json
 {
@@ -16,7 +16,7 @@ On construction, `restless()` walks up from the current working directory lookin
       "name": "Test API",
       "requestIdPrefix": "TST",
       "rootDir": ".",
-      "oasFile": ".api/openapi.yaml",
+      "oasFile": ".restless/openapi.yaml",
       "framework": "Fastify",
       "language": "javascript",
       "baseUrl": "…",
@@ -52,8 +52,8 @@ These values are currently hardcoded. If a real use case needs them tuneable, ad
 Each batched `POST /v1/request` payload is an array of HAR-wrapped logs. The SDK ships:
 
 - a per-request `apiKey` (the masked end-user identifier)
-- a per-request `projectId` (customer / org grouping key, when provided)
-- enriched project metadata (label, contact emails, any extra fields) when the SDK decides the server needs fresh enrichment
+- a per-request `projectId` (the wire-format name for the user-supplied `owner.id`: customer / org grouping key)
+- enriched owner metadata (label, contact emails, any extra fields) when the SDK decides the server needs fresh enrichment
 - the HAR 1.2 envelope containing the request / response pair
 
 Server-facing details (the exact wire JSON, auxiliary grouping blocks the server indexes on) live in `src/lib/uploader.ts`. If you need to change them, coordinate with the metrics server's ingest path.
@@ -79,7 +79,7 @@ This format is a contract with the dashboard. The frontend pattern-matches on `<
 
 Extensions come from two sources, both additive on top of the defaults:
 
-1. **`.api/settings.json` → `apis[].redact`**: populated by the `api` setup CLI (it scans the OpenAPI spec + code for custom auth mechanisms). Useful when every deploy of this API needs the same custom redaction.
+1. **`.restless/settings.json` → `apis[].redact`**: populated by the `api` setup CLI (it scans the OpenAPI spec + code for custom auth mechanisms). Useful when every deploy of this API needs the same custom redaction.
 2. **`opts.redact` passed to `restless()`**: per-process extensions. Useful when the same SDK package is used across multiple services with different secrets.
 
 Both extensions merge with the built-in defaults. Defaults are always applied.
@@ -98,7 +98,7 @@ The setup callback's `enrich` function lets users do expensive lookups (DB, JWT 
 
 ### Cache behavior
 
-- Keyed by `projectId` when provided (so multiple end-users from the same project share a cache slot), falling back to the masked `apiKey` when no project is set.
+- Keyed by `owner.id` when provided (so multiple end-users from the same owner share a cache slot), falling back to the masked `apiKey` when no owner is set.
 - Entries are marked fresh after `enrich()` resolves successfully.
 - A 1-hour TTL backstops the cache (`DEFAULT_TTL_MS` in `src/lib/enrichCache.ts`).
 - `enrich` failures are swallowed and NOT cached. The next request will retry.
@@ -121,7 +121,7 @@ When a user is cached-fresh, the upload payload contains just the masked `apiKey
 
 `mask()` produces `sha512-<base64-digest>?<last4>`. This format is the SDK's wire contract with the metrics server's lookup code. Changing the format requires a coordinated server update; don't do it in isolation.
 
-Falsy input returns `undefined` rather than hashing a placeholder. When no `apiKey` and no `projectId` are provided, the log is tagged as anonymous.
+Falsy input returns `undefined` rather than hashing a placeholder. When neither `apiKey` nor `owner.id` is provided, the log is tagged as anonymous.
 
 ## Error fingerprints
 
@@ -188,7 +188,7 @@ If `RESTLESS_KEY` (and `README_API_KEY`) are both unset when `restless()` is cal
 
 - **Missing API key:** the batch is dropped silently. With `DEBUG=restless` you'll see a warning.
 - **Upload failures:** swallowed. `DEBUG=restless` logs the status + body.
-- **Setup callback throws:** caught, falls back to the `.api/settings.json` defaults for the request.
-- **Malformed `.api/settings.json`:** returns `null` from the loader → no auto-config, no crash.
+- **Setup callback throws:** caught, falls back to the `.restless/settings.json` defaults for the request.
+- **Malformed `.restless/settings.json`:** returns `null` from the loader → no auto-config, no crash.
 
 The overriding principle: observability never takes down the request path.
