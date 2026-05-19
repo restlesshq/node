@@ -138,7 +138,7 @@ describe("restless() — redact merge from settings + opts", () => {
 
       expect(byName("x-from-settings")).toMatch(/^<REDACTED:/);
       expect(byName("x-from-opts")).toMatch(/^<REDACTED:/);
-      expect(byName("authorization")).toMatch(/^<REDACTED:/); // built-in default
+      expect(byName("authorization")).toMatch(/^Bearer <REDACTED:/); // built-in default; scheme prefix preserved
       expect(byName("x-untouched")).toBe("plain-value");
     } finally {
       process.chdir(origCwd);

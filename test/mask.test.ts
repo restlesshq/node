@@ -37,9 +37,14 @@ describe("mask()", () => {
     expect(mask("REPLACE_ME")).toBeUndefined();
   });
 
-  it("is idempotent — mask(mask(x)) === mask(x)", () => {
+  it("is idempotent: mask(mask(x)) === mask(x)", () => {
     const once = mask("rdme_abc123wxyz");
     expect(once).toBeDefined();
     expect(mask(once)).toBe(once);
+  });
+
+  it("passes through SDK-redacted values unchanged", () => {
+    expect(mask("<REDACTED:24:u234>")).toBe("<REDACTED:24:u234>");
+    expect(mask("<REDACTED:7>")).toBe("<REDACTED:7>");
   });
 });

@@ -105,10 +105,15 @@ describe("universal middleware: runtime framework detection", () => {
     await (mw as any)(useParent ? parent : child);
 
     expect(parentHooks.onRequest).toHaveLength(1);
+    // The setup-callback work now lives in preHandler (so req.user set
+    // by other onRequest hooks is visible to it). Both hooks must
+    // register on the parent — never the child.
+    expect(parentHooks.preHandler).toHaveLength(1);
     expect(childHooks.onRequest).toBeUndefined();
+    expect(childHooks.preHandler).toBeUndefined();
 
-    // Now fire a "user route" request through the parent's onRequest hook.
-    // If the SDK's hook registered on the child it would never run here.
+    // Fire a "user route" request through both hooks. If either had
+    // registered on the child it would never run here.
     const fakeReq: any = {
       headers: { host: "localhost", "x-test": "1" },
       raw: { socket: {}, method: "GET", url: "/hi" },
@@ -116,6 +121,7 @@ describe("universal middleware: runtime framework detection", () => {
     };
     const fakeReply: any = { header: () => {}, code: () => fakeReply };
     await parentHooks.onRequest![0]!(fakeReq, fakeReply);
+    await parentHooks.preHandler![0]!(fakeReq, fakeReply);
     expect(cb).toHaveBeenCalled();
   });
 

@@ -79,7 +79,20 @@ function buildDenySet(
   return new Set([...defaults, ...extra].map(normalize));
 }
 
-/** Redact sensitive HTTP headers. Returns a new object — does not mutate input. */
+/**
+ * Headers that carry an HTTP auth-scheme prefix (e.g. `Authorization: Bearer
+ * <token>`). For these we preserve the scheme word so a debugger reading the
+ * dashboard can see at a glance whether the request used Bearer / Basic /
+ * a custom scheme — only the credential portion gets replaced. Other
+ * sensitive headers (`x-api-key`, `cookie`, etc.) are redacted as a whole
+ * because the entire value IS the secret.
+ */
+const SCHEME_PREFIX_HEADERS: ReadonlySet<string> = new Set([
+  normalize("authorization"),
+  normalize("proxy-authorization"),
+]);
+
+/** Redact sensitive HTTP headers. Returns a new object; does not mutate input. */
 export function redactHeaders(
   headers: Record<string, string>,
   extra: string[] = [],
@@ -87,7 +100,22 @@ export function redactHeaders(
   const deny = buildDenySet(DEFAULT_HEADER_DENYLIST, extra);
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(headers)) {
-    out[k] = deny.has(normalize(k)) ? redactValue(v) : v;
+    const norm = normalize(k);
+    if (!deny.has(norm)) {
+      out[k] = v;
+      continue;
+    }
+    // Split on the FIRST whitespace run only — auth schemes are a single
+    // token followed by the credential. Anything without a space (or
+    // without anything after it) gets redacted whole, same as before.
+    if (SCHEME_PREFIX_HEADERS.has(norm)) {
+      const m = v.match(/^(\S+)(\s+)(\S.*)$/);
+      if (m) {
+        out[k] = `${m[1]}${m[2]}${redactValue(m[3])}`;
+        continue;
+      }
+    }
+    out[k] = redactValue(v);
   }
   return out;
 }

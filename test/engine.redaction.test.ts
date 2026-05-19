@@ -41,7 +41,8 @@ describe("CaptureEngine — redaction pipeline", () => {
     const auth = entry.request.headers.find(
       (h: any) => h.name === "authorization",
     );
-    expect(auth.value).toMatch(/^<REDACTED:/);
+    // Auth-scheme prefix is preserved; only the credential gets replaced.
+    expect(auth.value).toMatch(/^Bearer <REDACTED:\d+(:.{4})?>$/);
   });
 
   it("redacts api_key in query string", async () => {

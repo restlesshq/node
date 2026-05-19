@@ -37,9 +37,11 @@ export function mask(apiKey: string | undefined | null): string | undefined {
   if (!apiKey) return undefined;
   if (PLACEHOLDER_KEYS.has(apiKey)) return undefined;
   // Idempotent: if the input is already in our `sha512-…?last4` form
-  // (e.g. accidental `mask(mask(key))` through some indirection), pass
-  // it through unchanged rather than hashing the hash.
+  // (e.g. accidental `mask(mask(key))` through some indirection), or
+  // already redacted by the SDK as `<REDACTED:N[:last4]>`, pass it
+  // through unchanged rather than hashing the hash.
   if (apiKey.startsWith("sha512-")) return apiKey;
+  if (/^<REDACTED:\d+(?::[^>]*)?>$/.test(apiKey)) return apiKey;
   const hash = createHash("sha512").update(apiKey).digest("base64");
   const last4 = apiKey.slice(-4);
   return `sha512-${hash}?${last4}`;

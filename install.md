@@ -64,9 +64,11 @@ app.use(restless.setup((req) => ({
 ```js
 await fastify.register(restless.setup((req) => ({
   apiKey: restless.mask(req.headers.authorization),
-  owner: { id: req.user.workspaceId },
+  owner: req.user ? { id: req.user.workspaceId } : undefined,
 })));
 ```
+
+The SDK plugin uses two Fastify hooks: `onRequest` (mints request ID, sets response headers) and `preHandler` (runs the setup callback, handles blocking). Because the setup callback fires in `preHandler`, it runs AFTER every `onRequest` hook, so `req.user` and anything else other `onRequest` hooks attached is visible regardless of whether the SDK plugin is registered before or after auth. If your auth lives in `preHandler` instead of `onRequest`, register it BEFORE the SDK plugin so it runs first.
 
 ### Koa
 
@@ -147,7 +149,16 @@ Extra top-level fields are preserved and stored on the log.
 | Per-user API (one key per developer)         | The user's stable internal id (uuid / pk)               |
 | Anonymous / no identity model                | Omit `owner` entirely; every log lands as anonymous     |
 
-**Never use any of these as `owner.id`:** an API key (rotatable, also a secret), an email address (changeable), a username, a JWT, or any other value that can change for the same customer. If it can rotate, it's wrong.
+**Never use any of these as `owner.id`:** an API key (rotatable, also a secret), an email address (changeable), a username, a JWT, a placeholder literal like `'anonymous'` / `'none'` / `'guest'`, or any other value that can change for the same customer. If it can rotate or it's a dummy string, it's wrong.
+
+**For requests with no real owner** (no authenticated user, public endpoints, health checks): return `owner: undefined` for that request, or omit the `owner` key entirely. Don't substitute a placeholder string: the SDK has its own anonymous bucket on the wire-format side, and a fake `'anonymous'` id fake-groups every unauthenticated request under one tenant on the dashboard. Example:
+
+```js
+return {
+  apiKey: restless.mask(extractApiKey(req)),
+  owner: req.user ? { id: req.user.workspaceId } : undefined,
+};
+```
 
 ```ts
 interface OwnerSetup {

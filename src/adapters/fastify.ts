@@ -33,6 +33,27 @@ async function restlessFastifyPlugin(fastify: any, handle: SetupHandle) {
 
   fastify.decorateRequest("_restless", null);
 
+  // Why two hooks instead of one:
+  //
+  // The user's `setup(cb)` reads framework-native request state
+  // (`req.user`, `req.session`, custom decorators) that auth middleware
+  // attaches. Fastify runs `onRequest` hooks in registration order, so
+  // when the SDK plugin is registered before a user `addHook('onRequest',
+  // authFn)`, the SDK's `onRequest` fires first and sees `req.user`
+  // undefined: every authenticated request lands on the dashboard as
+  // anonymous even though the user is fully logged in.
+  //
+  // Splitting the work fixes that: `onRequest` does the cheap stuff that
+  // must happen early (mint request ID, stamp response headers, allocate
+  // state), and `preHandler` calls the user's setup callback after every
+  // `onRequest` hook has had a chance to populate request state. Blocking
+  // still works because `preHandler` runs before the route handler.
+  //
+  // Edge case: if a user auth hook in `onRequest` throws or sends a
+  // response, the route short-circuits and our `preHandler` never runs.
+  // `state.setup` stays null and `onSend` records the log as anonymous,
+  // which is correct: an auth-rejected request has no owner.
+
   fastify.addHook("onRequest", async (req: any, reply: any) => {
     const reqHeaders: Record<string, string> = {};
     for (const [k, v] of Object.entries(req.headers)) {
@@ -41,19 +62,6 @@ async function restlessFastifyPlugin(fastify: any, handle: SetupHandle) {
     const protocol = req.raw.socket?.encrypted ? "https" : "http";
     const host = req.headers.host || "localhost";
     const fullUrl = `${protocol}://${host}${req.raw.url || "/"}`;
-
-    // Pass the native Fastify request through — users can access anything
-    // their decorators / hooks attached.
-    const setup = await engine.resolve(req);
-
-    const blocked = resolveBlock(setup);
-    if (blocked) {
-      reply
-        .code(blocked.status)
-        .type("application/json")
-        .send({ error: blocked.message });
-      return;
-    }
 
     const rawId = newRequestId();
     const idHeaders = requestIdResponseHeaders(
@@ -65,7 +73,7 @@ async function restlessFastifyPlugin(fastify: any, handle: SetupHandle) {
     for (const [k, v] of Object.entries(idHeaders)) reply.header(k, v);
 
     req._restless = {
-      setup,
+      setup: null,
       reqHeaders,
       rawId,
       fullUrl,
@@ -74,10 +82,36 @@ async function restlessFastifyPlugin(fastify: any, handle: SetupHandle) {
     };
   });
 
+  fastify.addHook("preHandler", async (req: any, reply: any) => {
+    const state = req._restless;
+    if (!state) return;
+
+    // Pass the native Fastify request through — users can access anything
+    // their decorators / onRequest hooks attached (req.user, req.session,
+    // etc.).
+    const setup = await engine.resolve(req);
+    state.setup = setup;
+
+    const blocked = resolveBlock(setup);
+    if (blocked) {
+      reply
+        .code(blocked.status)
+        .type("application/json")
+        .send({ error: blocked.message });
+      return;
+    }
+  });
+
   fastify.addHook("onSend", async (req: any, reply: any, payload: any) => {
     const state = req._restless as
       | {
-          setup: ResolvedSetup;
+          /**
+           * Null when `preHandler` never ran — i.e. an earlier hook (auth,
+           * rate limit) short-circuited the request. The log still gets
+           * recorded; it just has no apiKey / owner attached, which is
+           * correct because no setup callback ever observed this request.
+           */
+          setup: ResolvedSetup | null;
           reqHeaders: Record<string, string>;
           rawId: string;
           fullUrl: string;
@@ -86,6 +120,7 @@ async function restlessFastifyPlugin(fastify: any, handle: SetupHandle) {
         }
       | null;
     if (!state) return payload;
+    const setup: ResolvedSetup = state.setup || {};
 
     const debug = buildDebugInjection({
       status: reply.statusCode,
@@ -133,8 +168,8 @@ async function restlessFastifyPlugin(fastify: any, handle: SetupHandle) {
       },
       duration,
       user: {
-        apiKey: state.setup.apiKey,
-        project: state.setup.project,
+        apiKey: setup.apiKey,
+        project: setup.project,
       },
     });
 

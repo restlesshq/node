@@ -34,7 +34,9 @@ describe("redactHeaders", () => {
       "content-type": "application/json",
       host: "example.com",
     });
-    expect(out.authorization).toMatch(/^<REDACTED:/);
+    // Authorization preserves the auth-scheme prefix; only the credential
+    // portion gets redacted.
+    expect(out.authorization).toMatch(/^Bearer <REDACTED:\d+(:.{4})?>$/);
     expect(out.cookie).toMatch(/^<REDACTED:/);
     expect(out["content-type"]).toBe("application/json");
     expect(out.host).toBe("example.com");
@@ -45,8 +47,23 @@ describe("redactHeaders", () => {
       Authorization: "Bearer xxxxxxxxxxxx",
       "X-API-KEY": "sk_abcdef0123",
     });
-    expect(out.Authorization).toMatch(/^<REDACTED:/);
+    expect(out.Authorization).toMatch(/^Bearer <REDACTED:\d+(:.{4})?>$/);
+    // x-api-key isn't an auth-scheme header — the whole value is the secret.
     expect(out["X-API-KEY"]).toMatch(/^<REDACTED:/);
+  });
+
+  it("preserves non-Bearer auth schemes too", () => {
+    const out = redactHeaders({
+      authorization: "Basic dXNlcjpwYXNzd29yZA==",
+    });
+    expect(out.authorization).toMatch(/^Basic <REDACTED:\d+(:.{4})?>$/);
+  });
+
+  it("falls back to whole-value redaction when there's no scheme prefix", () => {
+    const out = redactHeaders({
+      authorization: "eyJhbGciOiJIUzI1NiJ9.payload.sig",
+    });
+    expect(out.authorization).toMatch(/^<REDACTED:\d+(:.{4})?>$/);
   });
 
   it("honors extra denylist entries", () => {
