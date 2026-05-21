@@ -7,6 +7,7 @@ import type {
 import { Uploader, type UploaderConfig } from "./uploader.js";
 import { Blocklist } from "./blocklist.js";
 import { EnrichCache } from "./enrichCache.js";
+import { RecoveryCache } from "./recoveryCache.js";
 import {
   redactHeaders,
   redactUrl,
@@ -14,7 +15,7 @@ import {
   truncateBody,
   type RedactOptions,
 } from "./redact.js";
-import { fingerprint } from "./fingerprint.js";
+import { fingerprint, type Fingerprint } from "./fingerprint.js";
 
 export const MAX_BODY_BYTES = 256 * 1024;
 
@@ -40,16 +41,19 @@ export class CaptureEngine {
   readonly uploader: Uploader;
   readonly blocklist: Blocklist;
   readonly enrichCache: EnrichCache;
+  readonly recoveryCache: RecoveryCache;
   private callback: SetupCallback | null = null;
   private redactOpts: RedactOptions;
 
   constructor(cfg: EngineConfig) {
     this.blocklist = new Blocklist();
     this.enrichCache = new EnrichCache();
+    this.recoveryCache = new RecoveryCache();
     this.redactOpts = cfg.redact || {};
     this.uploader = new Uploader({
       ...cfg,
-      onResponse: (body) => this.handleServerResponse(body),
+      onResponse: (body, batchFingerprints) =>
+        this.handleServerResponse(body, batchFingerprints),
     });
   }
 
@@ -58,16 +62,85 @@ export class CaptureEngine {
   }
 
   /**
-   * Server can respond with `{ needsEnrichment: [<ownerId>...] }` to force
-   * re-running `enrich` on the next request from that owner.
+   * Server-driven cache management piggybacked on the `/v1/request` upload
+   * response. Two channels:
+   *
+   *   - `needsEnrichment: [ownerId...]` — invalidate per-owner enrich cache.
+   *   - `recoveryMessages: { [fingerprintKey]: string }` — Agent Recovery
+   *     "next steps" messages. We populate the positive cache from the
+   *     dict, then negative-cache every fingerprint we just uploaded that
+   *     the server didn't return a message for. This guarantees the
+   *     SECOND occurrence of every error is a sync cache hit (positive or
+   *     negative), so the hot path never waits on the network.
    */
-  private handleServerResponse(body: unknown): void {
+  private handleServerResponse(
+    body: unknown,
+    batchFingerprints: string[] = [],
+  ): void {
     if (!body || typeof body !== "object") return;
-    const needs = (body as { needsEnrichment?: unknown }).needsEnrichment;
-    if (!Array.isArray(needs)) return;
-    for (const key of needs) {
-      if (typeof key === "string") this.enrichCache.invalidate(key);
+    const obj = body as {
+      needsEnrichment?: unknown;
+      recoveryMessages?: unknown;
+    };
+
+    if (Array.isArray(obj.needsEnrichment)) {
+      for (const key of obj.needsEnrichment) {
+        if (typeof key === "string") this.enrichCache.invalidate(key);
+      }
     }
+
+    const messages =
+      obj.recoveryMessages && typeof obj.recoveryMessages === "object"
+        ? (obj.recoveryMessages as Record<string, unknown>)
+        : {};
+    for (const key of batchFingerprints) {
+      const v = messages[key];
+      if (typeof v === "string") {
+        this.recoveryCache.set(key, v);
+      } else if (v === null) {
+        this.recoveryCache.set(key, null);
+      } else if (this.recoveryCache.get(key) === undefined) {
+        // Only write a fresh negative entry; don't clobber a positive
+        // cached value the server already gave us on a previous round.
+        this.recoveryCache.set(key, null);
+      }
+    }
+  }
+
+  /**
+   * Sync lookup for an injected Agent Recovery message. Hot-path safe:
+   * returns from the local cache, never touches the network. A cold miss
+   * just returns `undefined` and the adapter injects no message — the
+   * next upload pulls the message back and the next occurrence hits.
+   */
+  lookupRecovery(fingerprintKey: string): string | undefined {
+    const v = this.recoveryCache.get(fingerprintKey);
+    return typeof v === "string" ? v : undefined;
+  }
+
+  /**
+   * Compute (or no-op for non-errors) the error fingerprint for a captured
+   * request. Adapters call this BEFORE building the debug-injection so
+   * they can look up a recovery message; the result is then attached to
+   * the CapturedRequest so `record()` doesn't recompute it.
+   */
+  computeFingerprint(captured: CapturedRequest): Fingerprint | undefined {
+    if (captured.response.status < 400) return undefined;
+    let parsed: unknown = captured.response.body;
+    if (typeof parsed === "string") {
+      try {
+        parsed = JSON.parse(parsed);
+      } catch {
+        // leave as string; fingerprint() handles both shapes
+      }
+    }
+    return fingerprint({
+      status: captured.response.status,
+      method: captured.request.method,
+      route: captured.routePattern,
+      responseHeaders: captured.response.headers,
+      responseBody: parsed,
+    });
   }
 
   async resolve(req: unknown): Promise<ResolvedSetup> {
@@ -161,22 +234,16 @@ export class CaptureEngine {
     };
     // Fingerprint errors only. The server treats an empty fingerprint as
     // "this was a successful response" and skips error grouping.
-    if (sanitized.response.status >= 400) {
-      let body: unknown = sanitized.response.body;
-      if (typeof body === "string") {
-        try {
-          body = JSON.parse(body);
-        } catch {
-          // leave as string; fingerprint() handles both shapes
-        }
-      }
-      sanitized.errorFingerprint = fingerprint({
-        status: sanitized.response.status,
-        method: sanitized.request.method,
-        route: sanitized.routePattern,
-        responseHeaders: sanitized.response.headers,
-        responseBody: body,
-      });
+    //
+    // Reuse a fingerprint already attached by the adapter — adapters
+    // compute it pre-response so they can look up an Agent Recovery
+    // message; recomputing here would do redundant string work on the
+    // upload path.
+    if (
+      !sanitized.errorFingerprint &&
+      sanitized.response.status >= 400
+    ) {
+      sanitized.errorFingerprint = this.computeFingerprint(sanitized);
     }
     this.uploader.push(sanitized);
   }

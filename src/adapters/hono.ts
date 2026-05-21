@@ -5,6 +5,7 @@ import {
   requestIdResponseHeaders,
   buildDebugInjection,
   applyInternalBodyMods,
+  lookupErrorRecovery,
   resolveBlock,
   type SetupHandle,
 } from "./_shared.js";
@@ -61,14 +62,6 @@ function honoMiddleware(handle: SetupHandle) {
     const duration = Date.now() - startTime;
     const res = c.res as Response;
 
-    const debug = buildDebugInjection({
-      status: res.status,
-      requestId: rawId,
-      baseUrl: opts.baseUrl,
-      prefix: opts.requestIdPrefix,
-    });
-    for (const [k, v] of Object.entries(debug.headers)) c.header(k, v);
-
     const resHeaders: Record<string, string> = {};
     res.headers.forEach((v, k) => {
       resHeaders[k] = v;
@@ -80,6 +73,25 @@ function honoMiddleware(handle: SetupHandle) {
     } catch {
       /* swallow */
     }
+
+    const { fingerprint, recovery } = lookupErrorRecovery(engine, {
+      request: { method: req.method, url: req.url, headers: reqHeaders },
+      response: {
+        status: res.status,
+        headers: resHeaders,
+        body: rawBody,
+      },
+      routePattern: c.req.routePath,
+    });
+
+    const debug = buildDebugInjection({
+      status: res.status,
+      requestId: rawId,
+      baseUrl: opts.baseUrl,
+      prefix: opts.requestIdPrefix,
+      recovery,
+    });
+    for (const [k, v] of Object.entries(debug.headers)) c.header(k, v);
 
     const modified = applyInternalBodyMods(
       rawBody,
@@ -114,6 +126,7 @@ function honoMiddleware(handle: SetupHandle) {
         apiKey: setup.apiKey,
         project: setup.project,
       },
+      errorFingerprint: fingerprint,
     });
   };
 }

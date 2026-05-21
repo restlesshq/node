@@ -1,5 +1,7 @@
 import type { RestlessClient, SetupCallback } from "../index.js";
-import type { SetupResult } from "../types.js";
+import type { SetupResult, CapturedRequest } from "../types.js";
+import type { CaptureEngine } from "../lib/capture.js";
+import type { Fingerprint } from "../lib/fingerprint.js";
 import { newRequestId, formatRequestId } from "../lib/requestId.js";
 
 /** What `restless.setup(cb)` returns. Adapters accept this shape. */
@@ -62,12 +64,18 @@ export function requestIdResponseHeaders(
  *
  * On errors we also add `x-log-url` and `x-debug` response headers —
  * returned from this helper so the adapter can set them.
+ *
+ * `recovery`, when present, is a customer-authored "next steps" message
+ * attached to this error's fingerprint via Agent Recovery (/errors).
+ * It's looked up sync from the SDK's in-process cache; the lookup never
+ * waits on the network.
  */
 export function buildDebugInjection(args: {
   status: number;
   requestId: string;
   baseUrl: string;
   prefix?: string;
+  recovery?: string;
 }): {
   headers: Record<string, string>;
   mutateJsonBody?: (body: unknown) => unknown;
@@ -77,6 +85,7 @@ export function buildDebugInjection(args: {
   const display = formatRequestId(args.requestId, args.prefix);
   const logUrl = `${args.baseUrl}/logs/${args.requestId}`;
   const debugCmd = `npx api debug ${display}`;
+  const recovery = args.recovery;
 
   return {
     headers: {
@@ -85,9 +94,14 @@ export function buildDebugInjection(args: {
     },
     mutateJsonBody: (body: unknown) => {
       if (body && typeof body === "object" && !Array.isArray(body)) {
+        const debug: Record<string, unknown> = {
+          log: logUrl,
+          cli: debugCmd,
+        };
+        if (recovery) debug.recovery = recovery;
         return {
           ...(body as Record<string, unknown>),
-          debug: { log: logUrl, cli: debugCmd },
+          debug,
         };
       }
       return body;
@@ -113,6 +127,27 @@ export function applyInternalBodyMods(
   } catch {
     return body;
   }
+}
+
+/**
+ * Compute the error fingerprint for a response (if any) and look up a
+ * cached Agent Recovery message for it. Hot-path safe: both calls are
+ * sync, no I/O. Adapters call this just before assembling the debug
+ * injection so they can:
+ *
+ *   1. Inject the recovery message into the response body (when cached).
+ *   2. Hand the precomputed fingerprint back to `engine.record()` so it
+ *      doesn't repeat the work on the upload path.
+ */
+export function lookupErrorRecovery(
+  engine: CaptureEngine,
+  captured: Pick<CapturedRequest, "request" | "response" | "routePattern">,
+): { fingerprint?: Fingerprint; recovery?: string } {
+  if (captured.response.status < 400) return {};
+  const fingerprint = engine.computeFingerprint(captured as CapturedRequest);
+  if (!fingerprint) return {};
+  const recovery = engine.lookupRecovery(fingerprint.key);
+  return { fingerprint, recovery };
 }
 
 /** Resolve the block config into a concrete response spec. */

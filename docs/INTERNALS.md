@@ -148,6 +148,21 @@ Stability rules:
 
 The site never re-derives the fingerprint. It reads what the SDK shipped. This avoids the algorithm drifting between two implementations.
 
+## Agent Recovery messages
+
+A customer can attach a "next steps" message to a fingerprint group via the dashboard's Agent Recovery page (the `/errors` view). When the SDK sees an error whose fingerprint has a saved message, it injects the message into the response body's `debug.recovery` field so the calling agent has actionable guidance without an extra round-trip.
+
+The lookup is on the hot path of every 4xx/5xx, so the design is sync and cache-first:
+
+- `RecoveryCache` (in `src/lib/recoveryCache.ts`) is an in-process TTL'd map of `fingerprintKey → message | null`.
+- Adapters call `engine.lookupRecovery(key)` synchronously when an error is about to ship. The lookup never waits on the network; a cold miss simply means no message is injected this time.
+- Messages are seeded by piggybacking on the existing `/v1/request` upload response, exactly like enrich invalidation. The server returns `recoveryMessages: { [fingerprintKey]: string }` for any keys it has guidance for. The engine then negative-caches every uploaded fingerprint the server didn't return a message for, so subsequent occurrences hit the cache (positive or negative) without re-asking.
+- Two TTLs: positive entries last 1h, negative entries 5m. The shorter negative TTL means freshly-attached messages start working within a few minutes of being saved in the dashboard.
+
+The first occurrence of any given fingerprint after a process boot won't get a message injected. That's the deliberate trade-off: never block a user response on a network fetch.
+
+Adapters compute the fingerprint once, pre-response, so the same value can be (a) used for the recovery lookup and (b) attached to `CapturedRequest.errorFingerprint` for the upload — no redundant work on the path.
+
 ## Request IDs
 
 - Always RFC 4122 v4 UUIDs from `crypto.randomUUID()` (CSPRNG).

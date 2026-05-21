@@ -5,6 +5,7 @@ import {
   requestIdResponseHeaders,
   buildDebugInjection,
   applyInternalBodyMods,
+  lookupErrorRecovery,
   resolveBlock,
   type SetupHandle,
 } from "./_shared.js";
@@ -51,18 +52,10 @@ function koaMiddleware(handle: SetupHandle) {
 
     await next();
 
-    const debug = buildDebugInjection({
-      status: ctx.status,
-      requestId: rawId,
-      baseUrl: opts.baseUrl,
-      prefix: opts.requestIdPrefix,
-    });
-    for (const [k, v] of Object.entries(debug.headers)) ctx.set(k, v);
-
     const duration = Date.now() - startTime;
-    const resHeaders: Record<string, string> = {};
+    const preResHeaders: Record<string, string> = {};
     for (const [k, v] of Object.entries(ctx.response.headers)) {
-      if (v) resHeaders[k] = Array.isArray(v) ? v.join(", ") : String(v);
+      if (v) preResHeaders[k] = Array.isArray(v) ? v.join(", ") : String(v);
     }
 
     let rawBody: string | undefined;
@@ -73,6 +66,32 @@ function koaMiddleware(handle: SetupHandle) {
       } catch {
         rawBody = undefined;
       }
+    }
+
+    const routePattern = (ctx as any)._matchedRoute;
+
+    const { fingerprint, recovery } = lookupErrorRecovery(engine, {
+      request: { method: ctx.method, url: fullUrl, headers: reqHeaders },
+      response: {
+        status: ctx.status,
+        headers: preResHeaders,
+        body: rawBody,
+      },
+      routePattern,
+    });
+
+    const debug = buildDebugInjection({
+      status: ctx.status,
+      requestId: rawId,
+      baseUrl: opts.baseUrl,
+      prefix: opts.requestIdPrefix,
+      recovery,
+    });
+    for (const [k, v] of Object.entries(debug.headers)) ctx.set(k, v);
+
+    const resHeaders: Record<string, string> = {};
+    for (const [k, v] of Object.entries(ctx.response.headers)) {
+      if (v) resHeaders[k] = Array.isArray(v) ? v.join(", ") : String(v);
     }
 
     const modified = applyInternalBodyMods(
@@ -88,7 +107,7 @@ function koaMiddleware(handle: SetupHandle) {
     engine.record({
       requestId: rawId,
       startedAt,
-      routePattern: (ctx as any)._matchedRoute,
+      routePattern,
       request: {
         method: ctx.method,
         url: fullUrl,
@@ -110,6 +129,7 @@ function koaMiddleware(handle: SetupHandle) {
         apiKey: setup.apiKey,
         project: setup.project,
       },
+      errorFingerprint: fingerprint,
     });
   };
 }

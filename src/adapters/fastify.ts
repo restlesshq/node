@@ -6,6 +6,7 @@ import {
   requestIdResponseHeaders,
   buildDebugInjection,
   applyInternalBodyMods,
+  lookupErrorRecovery,
   resolveBlock,
   type SetupHandle,
 } from "./_shared.js";
@@ -122,11 +123,34 @@ async function restlessFastifyPlugin(fastify: any, handle: SetupHandle) {
     if (!state) return payload;
     const setup: ResolvedSetup = state.setup || {};
 
+    const rawBody = typeof payload === "string" ? payload : undefined;
+    const preResHeaders: Record<string, string> = {};
+    for (const [k, v] of Object.entries(reply.getHeaders())) {
+      if (v) preResHeaders[k] = Array.isArray(v) ? v.join(", ") : String(v);
+    }
+    const rawPattern = req.routeOptions?.url as string | undefined;
+    const routePattern = rawPattern?.replace(/:(\w+)/g, "{$1}");
+
+    const { fingerprint, recovery } = lookupErrorRecovery(engine, {
+      request: {
+        method: req.raw.method || "GET",
+        url: state.fullUrl,
+        headers: state.reqHeaders,
+      },
+      response: {
+        status: reply.statusCode,
+        headers: preResHeaders,
+        body: rawBody,
+      },
+      routePattern,
+    });
+
     const debug = buildDebugInjection({
       status: reply.statusCode,
       requestId: state.rawId,
       baseUrl: opts.baseUrl,
       prefix: opts.requestIdPrefix,
+      recovery,
     });
     for (const [k, v] of Object.entries(debug.headers)) reply.header(k, v);
 
@@ -135,7 +159,6 @@ async function restlessFastifyPlugin(fastify: any, handle: SetupHandle) {
       if (v) resHeaders[k] = Array.isArray(v) ? v.join(", ") : String(v);
     }
 
-    const rawBody = typeof payload === "string" ? payload : undefined;
     const modified = applyInternalBodyMods(
       rawBody,
       resHeaders["content-type"],
@@ -143,8 +166,6 @@ async function restlessFastifyPlugin(fastify: any, handle: SetupHandle) {
     );
 
     const duration = Date.now() - state.startTime;
-    const rawPattern = req.routeOptions?.url as string | undefined;
-    const routePattern = rawPattern?.replace(/:(\w+)/g, "{$1}");
 
     engine.record({
       requestId: state.rawId,
@@ -171,6 +192,7 @@ async function restlessFastifyPlugin(fastify: any, handle: SetupHandle) {
         apiKey: setup.apiKey,
         project: setup.project,
       },
+      errorFingerprint: fingerprint,
     });
 
     return modified ?? payload;

@@ -65,7 +65,7 @@ Full per-framework examples are in [`install.md`](./install.md).
 - **One line of setup.** The factory returns a client; `setup(cb)` gives you framework-ready middleware back.
 - **Lazy owner enrichment.** Expensive DB lookups for owner metadata (display name, contact emails, plan tier) run only on the first request from each owner id, then cache until the server asks for a refresh. 100 requests from the same workspace don't hit your database 100 times.
 - **Safe by default.** Headers like `Authorization` / `Cookie` and body fields like `password` / `token` / `ssn` are redacted before anything leaves your server. The redaction list extends itself from your OpenAPI spec: the `npx api setup` flow scans your auth mechanisms and flags custom fields automatically.
-- **Error-triage built in.** 4xx / 5xx responses get an `x-log-url` header and a `debug` block in the JSON body so you can jump straight to the captured log.
+- **Error-triage built in.** 4xx / 5xx responses get an `x-log-url` header and a `debug` block in the JSON body so you can jump straight to the captured log. If a customer attaches a "next steps" message to an error in the dashboard's Agent Recovery view, the SDK injects it into the response as `debug.recovery` — looked up sync from an in-process cache, never blocking the response on a network call.
 - **Blocking.** Return `{ block: true }` from the setup callback to reject a request with a 403 before your handler runs.
 
 ## Environment variables

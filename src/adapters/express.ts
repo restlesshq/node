@@ -7,6 +7,7 @@ import {
   requestIdResponseHeaders,
   buildDebugInjection,
   applyInternalBodyMods,
+  lookupErrorRecovery,
   resolveBlock,
   type SetupHandle,
 } from "./_shared.js";
@@ -100,12 +101,42 @@ function expressMiddleware(handle: SetupHandle) {
 
       const duration = Date.now() - startTime;
 
+      // Snapshot the raw response BEFORE debug headers/body are layered on
+      // — fingerprinting runs against the user's actual response.
+      const rawBody = resChunks.length
+        ? Buffer.concat(resChunks).toString()
+        : undefined;
+      const preResHeaders: Record<string, string> = {};
+      for (const [k, v] of Object.entries(res.getHeaders())) {
+        if (v) preResHeaders[k] = Array.isArray(v) ? v.join(", ") : String(v);
+      }
+      const rawPattern = (req as unknown as { route?: { path?: string } }).route
+        ?.path;
+      const routePattern = rawPattern?.replace(/:(\w+)/g, "{$1}");
+
+      // Sync fingerprint + recovery cache lookup. No network on the hot
+      // path; a cache miss just means no message injected this time.
+      const { fingerprint, recovery } = lookupErrorRecovery(engine, {
+        request: {
+          method: req.method || "GET",
+          url: fullUrl,
+          headers: reqHeaders,
+        },
+        response: {
+          status: res.statusCode,
+          headers: preResHeaders,
+          body: rawBody,
+        },
+        routePattern,
+      });
+
       // Internal debug injection on 4xx/5xx JSON
       const debug = buildDebugInjection({
         status: res.statusCode,
         requestId: rawId,
         baseUrl: opts.baseUrl,
         prefix: opts.requestIdPrefix,
+        recovery,
       });
       for (const [k, v] of Object.entries(debug.headers)) res.setHeader(k, v);
 
@@ -114,18 +145,11 @@ function expressMiddleware(handle: SetupHandle) {
         if (v) resHeaders[k] = Array.isArray(v) ? v.join(", ") : String(v);
       }
 
-      const rawBody = resChunks.length
-        ? Buffer.concat(resChunks).toString()
-        : undefined;
       const modified = applyInternalBodyMods(
         rawBody,
         resHeaders["content-type"],
         debug.mutateJsonBody,
       );
-
-      const rawPattern = (req as unknown as { route?: { path?: string } }).route
-        ?.path;
-      const routePattern = rawPattern?.replace(/:(\w+)/g, "{$1}");
 
       engine.record({
         requestId: rawId,
@@ -149,6 +173,7 @@ function expressMiddleware(handle: SetupHandle) {
           apiKey: setup.apiKey,
           project: setup.project,
         },
+        errorFingerprint: fingerprint,
       });
 
       const finalChunk = modified !== rawBody ? modified : chunk;

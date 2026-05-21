@@ -13,8 +13,13 @@ export interface UploaderConfig {
   baseUrl: string;
   requestIdPrefix?: string;
   fetchImpl?: typeof fetch;
-  /** Called with the parsed server response body after a successful upload. */
-  onResponse?: (body: unknown) => void;
+  /**
+   * Called with the parsed server response body after a successful upload.
+   * `batchFingerprints` is the deduplicated list of error fingerprint keys
+   * the engine just uploaded; the engine uses it to negative-cache any
+   * fingerprint the server didn't return a recovery message for.
+   */
+  onResponse?: (body: unknown, batchFingerprints: string[]) => void;
 }
 
 function debugEnabled(): boolean {
@@ -172,6 +177,21 @@ export class Uploader {
 
     const batch = this.queue.splice(0);
 
+    // Unique fingerprint keys in this batch. Passed to onResponse so the
+    // engine can negative-cache anything the server didn't return a
+    // recovery message for.
+    const batchFingerprints: string[] = [];
+    {
+      const seen = new Set<string>();
+      for (const c of batch) {
+        const k = c.errorFingerprint?.key;
+        if (k && !seen.has(k)) {
+          seen.add(k);
+          batchFingerprints.push(k);
+        }
+      }
+    }
+
     const payload = batch.map((captured) => {
       const entry = toHarEntry(captured);
       const user = captured.user || {};
@@ -246,7 +266,7 @@ export class Uploader {
       if (this.onResponse) {
         try {
           const body = await res.json();
-          this.onResponse(body);
+          this.onResponse(body, batchFingerprints);
         } catch {
           /* non-JSON response is fine */
         }

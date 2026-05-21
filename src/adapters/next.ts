@@ -5,6 +5,7 @@ import {
   requestIdResponseHeaders,
   buildDebugInjection,
   applyInternalBodyMods,
+  lookupErrorRecovery,
   resolveBlock,
   type SetupHandle,
 } from "./_shared.js";
@@ -73,11 +74,21 @@ function nextWrapFactory(handle: SetupHandle) {
         /* swallow */
       }
 
+      const { fingerprint, recovery } = lookupErrorRecovery(engine, {
+        request: { method: req.method, url: req.url, headers: reqHeaders },
+        response: {
+          status: res.status,
+          headers: resHeaders,
+          body: rawBody,
+        },
+      });
+
       const debug = buildDebugInjection({
         status: res.status,
         requestId: rawId,
         baseUrl: opts.baseUrl,
         prefix: opts.requestIdPrefix,
+        recovery,
       });
 
       const modified = applyInternalBodyMods(
@@ -117,6 +128,7 @@ function nextWrapFactory(handle: SetupHandle) {
           apiKey: setup.apiKey,
           project: setup.project,
         },
+        errorFingerprint: fingerprint,
       });
 
       return new Response(finalBody, {
