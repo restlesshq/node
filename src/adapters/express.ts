@@ -151,6 +151,13 @@ function expressMiddleware(handle: SetupHandle) {
         debug.mutateJsonBody,
       );
 
+      // If we rewrote the body, Content-Length was already set to the
+      // pre-injection length by res.json()/res.send(). Update it so the
+      // client doesn't truncate the stream mid-JSON.
+      if (modified !== rawBody && modified !== undefined && !res.headersSent) {
+        res.setHeader("content-length", Buffer.byteLength(modified));
+      }
+
       engine.record({
         requestId: rawId,
         startedAt,
