@@ -90,6 +90,7 @@ function honoMiddleware(handle: SetupHandle) {
       baseUrl: opts.baseUrl,
       prefix: opts.requestIdPrefix,
       recovery,
+      docsUrl: engine.docsUrl,
     });
     for (const [k, v] of Object.entries(debug.headers)) c.header(k, v);
 

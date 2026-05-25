@@ -178,6 +178,8 @@ On 4xx/5xx responses we also add:
 - `x-debug`: the `npx api debug <id>` CLI invocation
 - A `debug` object injected into JSON response bodies with the same links plus a hint
 
+The host the SDK uses for `x-log-url` is learned from the metrics server: every `/v1/request` upload response can include `docsUrl` (origin only, e.g. `https://docs.customer.com`), which the engine caches in-process and the adapters read when building the debug injection. When the project has a verified custom docs domain, the SDK uses that; otherwise it falls back to the configured primary host. There's a one-batch staleness window after a domain change — until the next upload round-trips, the SDK falls back to `RESTLESS_BASE_URL` for the link host. The format is otherwise unchanged.
+
 ## Blocking
 
 Return `block: true | { status?, message? }` from the setup callback to reject a request with a 4xx response. The handler never runs.

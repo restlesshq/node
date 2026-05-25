@@ -44,6 +44,20 @@ export class CaptureEngine {
   readonly recoveryCache: RecoveryCache;
   private callback: SetupCallback | null = null;
   private redactOpts: RedactOptions;
+  /**
+   * Origin (scheme + host, no trailing slash) the SDK should use when
+   * constructing log-view links injected into 4xx/5xx responses.
+   * Learned from the server's `/v1/request` response — the metrics
+   * server resolves the project's verified custom domain (or the
+   * primary host as fallback) and tells us, so the SDK doesn't need
+   * to know the customer's docs hostname out of band.
+   *
+   * Undefined until the first batch round-trips. Until then,
+   * `_shared.ts:buildDebugInjection` falls back to `baseUrl` — the
+   * URL is still well-formed, it just isn't customer-branded yet.
+   * One cold-start staleness window after a docs-domain change.
+   */
+  private cachedDocsUrl: string | undefined;
 
   constructor(cfg: EngineConfig) {
     this.blocklist = new Blocklist();
@@ -59,6 +73,14 @@ export class CaptureEngine {
 
   setCallback(cb: SetupCallback) {
     this.callback = cb;
+  }
+
+  /** Latest server-resolved docs URL origin, or `undefined` if we
+   *  haven't seen a response yet. Adapters read this when assembling
+   *  the debug injection so the URL we surface tracks the customer's
+   *  custom-domain config. */
+  get docsUrl(): string | undefined {
+    return this.cachedDocsUrl;
   }
 
   /**
@@ -81,12 +103,21 @@ export class CaptureEngine {
     const obj = body as {
       needsEnrichment?: unknown;
       recoveryMessages?: unknown;
+      docsUrl?: unknown;
     };
 
     if (Array.isArray(obj.needsEnrichment)) {
       for (const key of obj.needsEnrichment) {
         if (typeof key === "string") this.enrichCache.invalidate(key);
       }
+    }
+
+    // Server-driven docs URL — origin only (e.g. `https://docs.customer.com`),
+    // no trailing slash. The SDK appends `/logs/<requestId>` when building
+    // injected debug links. Strips any trailing slash defensively so the
+    // server can be lax about what it sends.
+    if (typeof obj.docsUrl === "string" && obj.docsUrl) {
+      this.cachedDocsUrl = obj.docsUrl.replace(/\/+$/, "");
     }
 
     const messages =

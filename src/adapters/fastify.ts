@@ -151,6 +151,7 @@ async function restlessFastifyPlugin(fastify: any, handle: SetupHandle) {
       baseUrl: opts.baseUrl,
       prefix: opts.requestIdPrefix,
       recovery,
+      docsUrl: engine.docsUrl,
     });
     for (const [k, v] of Object.entries(debug.headers)) reply.header(k, v);
 

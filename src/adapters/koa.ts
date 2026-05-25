@@ -86,6 +86,7 @@ function koaMiddleware(handle: SetupHandle) {
       baseUrl: opts.baseUrl,
       prefix: opts.requestIdPrefix,
       recovery,
+      docsUrl: engine.docsUrl,
     });
     for (const [k, v] of Object.entries(debug.headers)) ctx.set(k, v);
 

@@ -76,6 +76,17 @@ export function buildDebugInjection(args: {
   baseUrl: string;
   prefix?: string;
   recovery?: string;
+  /**
+   * Origin to use for the customer-facing log link, learned from the
+   * metrics server's response to a prior upload. Origin only
+   * (`https://docs.customer.com`); the helper appends `/logs/<id>`.
+   *
+   * Falls back to `baseUrl` when the SDK hasn't round-tripped a
+   * batch yet (cold start) or the server doesn't yet return the
+   * field. The result is still well-formed, just not customer-branded
+   * until the next batch refreshes the cache.
+   */
+  docsUrl?: string;
 }): {
   headers: Record<string, string>;
   mutateJsonBody?: (body: unknown) => unknown;
@@ -83,7 +94,8 @@ export function buildDebugInjection(args: {
   if (args.status < 400) return { headers: {} };
 
   const display = formatRequestId(args.requestId, args.prefix);
-  const logUrl = `${args.baseUrl}/logs/${args.requestId}`;
+  const logHost = args.docsUrl || args.baseUrl;
+  const logUrl = `${logHost}/logs/${args.requestId}`;
   const debugCmd = `npx api debug ${display}`;
   const recovery = args.recovery;
 

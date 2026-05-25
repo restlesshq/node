@@ -89,6 +89,7 @@ function nextWrapFactory(handle: SetupHandle) {
         baseUrl: opts.baseUrl,
         prefix: opts.requestIdPrefix,
         recovery,
+        docsUrl: engine.docsUrl,
       });
 
       const modified = applyInternalBodyMods(
