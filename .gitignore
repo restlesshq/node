@@ -1,8 +1,8 @@
 node_modules
 dist
 coverage
+.env
 *.log
 .local/
 CLAUDE.md
 publish.sh
-config.bat
