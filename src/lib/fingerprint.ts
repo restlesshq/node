@@ -25,7 +25,14 @@ export type CapturedError = {
   stackTrace?: string | string[];
 };
 
-export type Strategy = "header" | "body-code" | "stack" | "message" | "route-only";
+export type Strategy =
+  | "resource"
+  | "endpoint"
+  | "header"
+  | "body-code"
+  | "stack"
+  | "message"
+  | "route-only";
 
 export type Fingerprint = {
   strategy: Strategy;
@@ -40,11 +47,45 @@ const NESTED_PATHS: ReadonlyArray<readonly string[]> = [
   ["error", "error_code"],
 ];
 
-// Five strategies, in priority order. First one that produces a key wins.
-// The earlier strategies are more deterministic; later ones are best-effort.
+// Strategies tried in priority order; first one that produces a key wins. 404
+// is intercepted first (it's route-oriented, not code-oriented - see below);
+// the rest run from most deterministic (header) to best-effort (route-only).
 export function fingerprint(err: CapturedError): Fingerprint {
   const status = err.status;
   const method = err.method || "GET";
+
+  // 0. 404 is resource-oriented and takes priority over the code-based
+  // strategies (a generic "not_found" code is the same on every route, so
+  // grouping 404s by code is useless for recovery). There are exactly TWO
+  // kinds of 404, and they need opposite advice:
+  //   - WITH a path parameter (e.g. GET /car/{id}): the route is fine, the
+  //     addressed resource is missing. Fix: verify the id; list the parent
+  //     collection (drop the id segment) to find valid ones.
+  //   - WITHOUT a path parameter (e.g. /imadethisup, or a paramless route):
+  //     the path/endpoint itself didn't resolve. Fix: call a real endpoint.
+  // We deliberately do NOT key per-route: the agent that receives the hint
+  // already knows the concrete path it called, so one general hint per kind is
+  // actionable, and a human only ever writes two 404 hints total (not one per
+  // route). `err.route` is the matched route pattern (absent when nothing
+  // matched), and `normalizeRoute` turns any concrete ids into `:id`, so the
+  // presence of a `:`/`{` template segment is the "has a parameter" signal.
+  if (status === 404) {
+    const route = err.route ? normalizeRoute(err.route) : "";
+    if (/[:{]/.test(route)) {
+      return {
+        strategy: "resource",
+        key: "404:resource",
+        reason: `404 on a parameterized route (${method} ${route}); the addressed resource was not found`,
+      };
+    }
+    return {
+      strategy: "endpoint",
+      key: "404:endpoint",
+      reason: route
+        ? `404 on ${method} ${route}; no resource at this path`
+        : "404 on a path that matched no route; the endpoint does not exist",
+    };
+  }
 
   // 1. Explicit header. Fully deterministic; the customer opted in.
   const headerCode = readHeaderCode(err.responseHeaders);
@@ -116,7 +157,8 @@ function readBodyCode(body: unknown): string | null {
   }
   for (const path of NESTED_PATHS) {
     let v: unknown = obj;
-    for (const p of path) v = (v as Record<string, unknown> | null | undefined)?.[p];
+    for (const p of path)
+      v = (v as Record<string, unknown> | null | undefined)?.[p];
     if (looksLikeCode(v)) return v;
   }
   return null;
@@ -135,7 +177,9 @@ function looksLikeCode(v: unknown): v is string {
 
 // Walks the stack from the top, skipping frames that aren't user code.
 // Returns { file, fn } where file is project-relative when possible.
-function topUserFrame(stack: string | string[]): { file: string; fn: string } | null {
+function topUserFrame(
+  stack: string | string[],
+): { file: string; fn: string } | null {
   const lines = typeof stack === "string" ? stack.split("\n") : stack;
   for (const raw of lines) {
     const line = String(raw);
@@ -166,7 +210,9 @@ function topUserFrame(stack: string | string[]): { file: string; fn: string } | 
 // Strip absolute path prefix down to a project-relative path. The exact prefix
 // varies per machine; we want the same fingerprint on dev and prod.
 function projectRelative(file: string): string {
-  const m = file.match(/\/(?:src|lib|app|api|routes|controllers|handlers)\/.+$/);
+  const m = file.match(
+    /\/(?:src|lib|app|api|routes|controllers|handlers)\/.+$/,
+  );
   return m ? m[0].slice(1) : file.split("/").slice(-2).join("/");
 }
 
@@ -177,7 +223,7 @@ function normalizeRoute(route?: string): string {
   return route
     .replace(
       /\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?=\/|$)/gi,
-      "/:id"
+      "/:id",
     )
     .replace(/\/\d+(?=\/|$)/g, "/:id")
     .replace(/\/[0-9a-f]{16,}(?=\/|$)/gi, "/:id");
@@ -190,7 +236,11 @@ function extractMessage(body: unknown): string {
   if (typeof obj.message === "string") return obj.message;
   const nested = obj.error as Record<string, unknown> | string | undefined;
   if (typeof nested === "string") return nested;
-  if (nested && typeof nested === "object" && typeof nested.message === "string") {
+  if (
+    nested &&
+    typeof nested === "object" &&
+    typeof nested.message === "string"
+  ) {
     return nested.message;
   }
   return "";
@@ -206,11 +256,11 @@ export function normalizeMessage(msg: string): string {
   if (!msg) return "";
   return msg
     .toLowerCase()
-    .replace(/https?:\/\/\S+/g, " ")          // urls
-    .replace(/\S+@\S+\.\S+/g, " ")            // emails
-    .replace(/['"`][^'"`]*['"`]/g, " ")       // quoted user input
-    .replace(/\b[\w-]*\d[\w-]*\b/gi, " ")     // any whole word containing a digit
-    .replace(/[^\w\s-]/g, " ")                // residual punctuation
+    .replace(/https?:\/\/\S+/g, " ") // urls
+    .replace(/\S+@\S+\.\S+/g, " ") // emails
+    .replace(/['"`][^'"`]*['"`]/g, " ") // quoted user input
+    .replace(/\b[\w-]*\d[\w-]*\b/gi, " ") // any whole word containing a digit
+    .replace(/[^\w\s-]/g, " ") // residual punctuation
     .replace(/\s+/g, " ")
     .trim()
     .split(" ")
