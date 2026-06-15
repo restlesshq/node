@@ -15,6 +15,17 @@ export function newRequestId(): string {
 }
 
 /**
+ * Short, throwaway correlation token for the recovery dig-in URL
+ * (`/p/<token>/<slug>.md`). NOT the request ID and grants no access — it
+ * only lets the dashboard correlate "an agent followed up on this error".
+ * 8 hex chars from a v4 UUID: ample to avoid collisions within a project's
+ * short (~5 min) follow-up window, short enough to read as an id not a payload.
+ */
+export function newFollowupToken(): string {
+  return randomUUID().replace(/-/g, "").slice(0, 8);
+}
+
+/**
  * Prepend a decorative prefix to a raw UUID.
  * e.g. ("9f18a0e2-...", "TST") → "TST-9f18a0e2-..."
  */

@@ -2,7 +2,11 @@ import type { RestlessClient, SetupCallback } from "../index.js";
 import type { SetupResult, CapturedRequest } from "../types.js";
 import type { CaptureEngine } from "../lib/capture.js";
 import type { Fingerprint } from "../lib/fingerprint.js";
-import { newRequestId, formatRequestId } from "../lib/requestId.js";
+import {
+  newRequestId,
+  formatRequestId,
+  newFollowupToken,
+} from "../lib/requestId.js";
 
 /** What `restless.setup(cb)` returns. Adapters accept this shape. */
 export interface SetupHandle {
@@ -76,6 +80,13 @@ export function buildDebugInjection(args: {
   baseUrl: string;
   prefix?: string;
   recovery?: string;
+  /** Error fingerprint key (e.g. "404:resource") + strategy, and the
+   *  request's method + templated route. Encoded into the per-request
+   *  "dig-in" URL so the calling agent can fetch deterministic next steps. */
+  fingerprint?: string;
+  strategy?: string;
+  method?: string;
+  path?: string;
   /**
    * Origin to use for the customer-facing log link, learned from the
    * metrics server's response to a prior upload. Origin only
@@ -97,7 +108,23 @@ export function buildDebugInjection(args: {
   const logHost = args.docsUrl || args.baseUrl;
   const logUrl = `${logHost}/logs/${args.requestId}`;
   const debugCmd = `npx api debug ${display}`;
-  const recovery = args.recovery;
+
+  // Per-request "dig-in" URL the calling agent (often an AI) can fetch for
+  // concrete next steps. Deliberately LEGIBLE - it ends in `<slug>.md` (the
+  // endpoint the agent called) so it reads as documentation, not a tracking
+  // blob (an opaque token in the tail kills trust / fetch-through). The
+  // `<followupToken>` is a short, throwaway correlation handle (NOT the request
+  // id, grants no access); the server maps it back to the request for the
+  // dashboard. Content is resolved from the slug, so the URL works even if the
+  // token is unknown/expired. Appended INTO `recovery` so the agent treats it
+  // as a next step, on every error - even ones with no authored hint.
+  const slug = recoverySlug(args.method, args.path);
+  const followupToken = newFollowupToken();
+  const digInUrl = `${logHost}/p/${followupToken}/${slug}.md`;
+  const digInLine = `For the accepted parameters and next steps, fetch ${digInUrl}`;
+  const recovery = args.recovery
+    ? `${args.recovery}\n\n${digInLine}`
+    : digInLine;
 
   return {
     headers: {
@@ -109,8 +136,8 @@ export function buildDebugInjection(args: {
         const debug: Record<string, unknown> = {
           log: logUrl,
           cli: debugCmd,
+          recovery,
         };
-        if (recovery) debug.recovery = recovery;
         return {
           ...(body as Record<string, unknown>),
           debug,
@@ -119,6 +146,26 @@ export function buildDebugInjection(args: {
       return body;
     },
   };
+}
+
+/**
+ * Legible URL slug for the recovery dig-in path, derived from method + route
+ * pattern: `GET /car/{id}` -> `get-car-id`. The server resolves it back to the
+ * operation by matching the same scheme against its OpenAPI endpoints, so this
+ * MUST stay in sync with `recoverySlug` in the app's `recovery` route. Empty /
+ * unmatched route (e.g. Next, or a 404 on no route) -> `unknown`, which the
+ * server renders as "not a documented endpoint".
+ */
+export function recoverySlug(method?: string, path?: string): string {
+  const m = (method || "").toLowerCase();
+  const p = (path || "").trim();
+  if (!m || !p) return "unknown";
+  const flat = p
+    .replace(/[/{}:]+/g, "-")
+    .replace(/[^a-zA-Z0-9-]/g, "")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+  return flat ? `${m}-${flat}` : m;
 }
 
 /**

@@ -11,7 +11,10 @@ import {
   resolveBlock,
   type SetupHandle,
 } from "./_shared.js";
-import { makeAdapterClient, type AdapterClient } from "../lib/adapterFactory.js";
+import {
+  makeAdapterClient,
+  type AdapterClient,
+} from "../lib/adapterFactory.js";
 
 /** The raw middleware — used internally and exposed for advanced wiring. */
 function expressMiddleware(handle: SetupHandle) {
@@ -137,6 +140,10 @@ function expressMiddleware(handle: SetupHandle) {
         baseUrl: opts.baseUrl,
         prefix: opts.requestIdPrefix,
         recovery,
+        fingerprint: fingerprint?.key,
+        strategy: fingerprint?.strategy,
+        method: req.method || "GET",
+        path: routePattern,
         docsUrl: engine.docsUrl,
       });
       for (const [k, v] of Object.entries(debug.headers)) res.setHeader(k, v);
@@ -207,4 +214,6 @@ function restlessExpress(
   return makeAdapterClient(apiKey, opts, (handle) => expressMiddleware(handle));
 }
 
-export default Object.assign(restlessExpress, { middleware: expressMiddleware });
+export default Object.assign(restlessExpress, {
+  middleware: expressMiddleware,
+});

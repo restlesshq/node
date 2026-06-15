@@ -10,7 +10,10 @@ import {
   resolveBlock,
   type SetupHandle,
 } from "./_shared.js";
-import { makeAdapterClient, type AdapterClient } from "../lib/adapterFactory.js";
+import {
+  makeAdapterClient,
+  type AdapterClient,
+} from "../lib/adapterFactory.js";
 
 /**
  * Marker Fastify reads on a plugin function: `true` means "skip the
@@ -104,22 +107,20 @@ async function restlessFastifyPlugin(fastify: any, handle: SetupHandle) {
   });
 
   fastify.addHook("onSend", async (req: any, reply: any, payload: any) => {
-    const state = req._restless as
-      | {
-          /**
-           * Null when `preHandler` never ran — i.e. an earlier hook (auth,
-           * rate limit) short-circuited the request. The log still gets
-           * recorded; it just has no apiKey / owner attached, which is
-           * correct because no setup callback ever observed this request.
-           */
-          setup: ResolvedSetup | null;
-          reqHeaders: Record<string, string>;
-          rawId: string;
-          fullUrl: string;
-          startedAt: string;
-          startTime: number;
-        }
-      | null;
+    const state = req._restless as {
+      /**
+       * Null when `preHandler` never ran — i.e. an earlier hook (auth,
+       * rate limit) short-circuited the request. The log still gets
+       * recorded; it just has no apiKey / owner attached, which is
+       * correct because no setup callback ever observed this request.
+       */
+      setup: ResolvedSetup | null;
+      reqHeaders: Record<string, string>;
+      rawId: string;
+      fullUrl: string;
+      startedAt: string;
+      startTime: number;
+    } | null;
     if (!state) return payload;
     const setup: ResolvedSetup = state.setup || {};
 
@@ -151,6 +152,10 @@ async function restlessFastifyPlugin(fastify: any, handle: SetupHandle) {
       baseUrl: opts.baseUrl,
       prefix: opts.requestIdPrefix,
       recovery,
+      fingerprint: fingerprint?.key,
+      strategy: fingerprint?.strategy,
+      method: req.raw.method || "GET",
+      path: routePattern,
       docsUrl: engine.docsUrl,
     });
     for (const [k, v] of Object.entries(debug.headers)) reply.header(k, v);
@@ -180,8 +185,8 @@ async function restlessFastifyPlugin(fastify: any, handle: SetupHandle) {
           typeof req.body === "string"
             ? req.body
             : req.body
-            ? JSON.stringify(req.body)
-            : undefined,
+              ? JSON.stringify(req.body)
+              : undefined,
       },
       response: {
         status: reply.statusCode,
@@ -223,6 +228,9 @@ function restlessFastify(
 
 // The raw plugin is also exposed as a property; mark it too so
 // `fastify.register(restless.plugin, handle)` works without encapsulation.
-(restlessFastifyPlugin as unknown as Record<symbol, unknown>)[skipOverride] = true;
+(restlessFastifyPlugin as unknown as Record<symbol, unknown>)[skipOverride] =
+  true;
 
-export default Object.assign(restlessFastify, { plugin: restlessFastifyPlugin });
+export default Object.assign(restlessFastify, {
+  plugin: restlessFastifyPlugin,
+});
