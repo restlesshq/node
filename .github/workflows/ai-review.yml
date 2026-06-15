@@ -1,0 +1,52 @@
+name: AI review
+
+# Runs Claude as the gate on every pull request. The job's pass/fail IS the
+# status check you mark as required in branch protection. A blocking finding
+# fails the job, which blocks the merge. See .github/scripts/ai-review.mjs.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+# One run per PR; a new push cancels the in-flight review.
+concurrency:
+  group: ai-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  ai-review:
+    name: ai-review
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # Install the SDK into an isolated dir OUTSIDE the checked-out PR tree,
+      # with lifecycle scripts disabled. Installing in the repo would run the
+      # PR's own package.json (and any postinstall it ships) against our token;
+      # --ignore-scripts also blocks install-time code from the dependency
+      # itself. The script resolves the SDK from AI_REVIEW_DEPS via createRequire
+      # (NODE_PATH doesn't apply to ESM bare-specifier imports).
+      # (Consider pinning @anthropic-ai/sdk to an exact known-good version
+      # instead of @latest once one is chosen, to close the supply-chain gap.)
+      - name: Install Anthropic SDK
+        run: npm install --prefix "${{ runner.temp }}/ai-review-deps" --no-save --no-package-lock --ignore-scripts @anthropic-ai/sdk@latest
+
+      - name: Review
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          AI_REVIEW_DEPS: ${{ runner.temp }}/ai-review-deps
+        run: node .github/scripts/ai-review.mjs
