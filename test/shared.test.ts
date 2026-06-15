@@ -54,7 +54,7 @@ describe("buildDebugInjection", () => {
   it("always injects a legible dig-in URL on error, even with no hint", () => {
     const d = buildDebugInjection({
       status: 404,
-      requestId: "abc",
+      requestId: "req-abc-123",
       baseUrl: "http://x",
       fingerprint: "404:resource",
       strategy: "resource",
@@ -64,13 +64,11 @@ describe("buildDebugInjection", () => {
     const mutated = d.mutateJsonBody!({ error: "boom" }) as {
       debug: { recovery: string };
     };
-    // `/p/<followupToken>/<slug>.md` - the slug is the endpoint, the token is a
-    // short throwaway correlation handle.
-    const m = mutated.debug.recovery.match(
-      /http:\/\/x\/p\/([a-f0-9]+)\/(\S+)\.md/,
-    );
+    // `/p/<requestId>/<slug>.md` - the slug is the endpoint (reads as docs); the
+    // first segment is the request id, for dashboard correlation.
+    const m = mutated.debug.recovery.match(/http:\/\/x\/p\/(\S+?)\/(\S+)\.md/);
     expect(m).toBeTruthy();
-    expect(m![1].length).toBeGreaterThanOrEqual(6); // short token
+    expect(m![1]).toBe("req-abc-123"); // the request id, for correlation
     expect(m![2]).toBe("get-car-id"); // legible slug from method+path
   });
 
@@ -85,7 +83,7 @@ describe("buildDebugInjection", () => {
     const mutated = d.mutateJsonBody!({ error: "boom" }) as {
       debug: { recovery: string };
     };
-    expect(mutated.debug.recovery).toMatch(/\/p\/[a-f0-9]+\/unknown\.md/);
+    expect(mutated.debug.recovery).toMatch(/\/p\/abc\/unknown\.md/);
   });
 
   it("keeps the authored hint and appends the dig-in URL", () => {
@@ -101,7 +99,7 @@ describe("buildDebugInjection", () => {
       debug: { recovery: string };
     };
     expect(mutated.debug.recovery).toContain("Use a valid status.");
-    expect(mutated.debug.recovery).toMatch(/\/p\/[a-f0-9]+\/get-orders\.md/);
+    expect(mutated.debug.recovery).toMatch(/\/p\/abc\/get-orders\.md/);
   });
 });
 

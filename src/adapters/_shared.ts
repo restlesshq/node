@@ -2,11 +2,7 @@ import type { RestlessClient, SetupCallback } from "../index.js";
 import type { SetupResult, CapturedRequest } from "../types.js";
 import type { CaptureEngine } from "../lib/capture.js";
 import type { Fingerprint } from "../lib/fingerprint.js";
-import {
-  newRequestId,
-  formatRequestId,
-  newFollowupToken,
-} from "../lib/requestId.js";
+import { newRequestId, formatRequestId } from "../lib/requestId.js";
 
 /** What `restless.setup(cb)` returns. Adapters accept this shape. */
 export interface SetupHandle {
@@ -112,15 +108,14 @@ export function buildDebugInjection(args: {
   // Per-request "dig-in" URL the calling agent (often an AI) can fetch for
   // concrete next steps. Deliberately LEGIBLE - it ends in `<slug>.md` (the
   // endpoint the agent called) so it reads as documentation, not a tracking
-  // blob (an opaque token in the tail kills trust / fetch-through). The
-  // `<followupToken>` is a short, throwaway correlation handle (NOT the request
-  // id, grants no access); the server maps it back to the request for the
-  // dashboard. Content is resolved from the slug, so the URL works even if the
-  // token is unknown/expired. Appended INTO `recovery` so the agent treats it
-  // as a next step, on every error - even ones with no authored hint.
+  // blob (an opaque token in the tail kills trust / fetch-through). The first
+  // segment is the request id - the SAME public id already in `debug.log` - so
+  // the dashboard can correlate the follow-up back to this request (did the
+  // agent then recover?) without any new tracking token. It grants no access:
+  // content is resolved from the slug + public OAS. Appended INTO `recovery` so
+  // the agent treats it as a next step, on every error.
   const slug = recoverySlug(args.method, args.path);
-  const followupToken = newFollowupToken();
-  const digInUrl = `${logHost}/p/${followupToken}/${slug}.md`;
+  const digInUrl = `${logHost}/p/${args.requestId}/${slug}.md`;
   const digInLine = `For the accepted parameters and next steps, fetch ${digInUrl}`;
   const recovery = args.recovery
     ? `${args.recovery}\n\n${digInLine}`
