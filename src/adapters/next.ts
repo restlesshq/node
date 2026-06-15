@@ -9,7 +9,10 @@ import {
   resolveBlock,
   type SetupHandle,
 } from "./_shared.js";
-import { makeAdapterClient, type AdapterClient } from "../lib/adapterFactory.js";
+import {
+  makeAdapterClient,
+  type AdapterClient,
+} from "../lib/adapterFactory.js";
 
 type NextHandler = (req: Request, ctx?: any) => Promise<Response> | Response;
 
@@ -89,6 +92,11 @@ function nextWrapFactory(handle: SetupHandle) {
         baseUrl: opts.baseUrl,
         prefix: opts.requestIdPrefix,
         recovery,
+        fingerprint: fingerprint?.key,
+        strategy: fingerprint?.strategy,
+        method: req.method,
+        // Next doesn't expose a matched route pattern; 404s here fall into the
+        // `endpoint` bucket and the dig-in lists available endpoints.
         docsUrl: engine.docsUrl,
       });
 
@@ -106,7 +114,8 @@ function nextWrapFactory(handle: SetupHandle) {
         opts.hasApiKey,
       );
       for (const [k, v] of Object.entries(idHeaders)) finalHeaders.set(k, v);
-      for (const [k, v] of Object.entries(debug.headers)) finalHeaders.set(k, v);
+      for (const [k, v] of Object.entries(debug.headers))
+        finalHeaders.set(k, v);
 
       const finalBody = modified !== rawBody ? modified : rawBody;
 

@@ -9,7 +9,10 @@ import {
   resolveBlock,
   type SetupHandle,
 } from "./_shared.js";
-import { makeAdapterClient, type AdapterClient } from "../lib/adapterFactory.js";
+import {
+  makeAdapterClient,
+  type AdapterClient,
+} from "../lib/adapterFactory.js";
 
 function koaMiddleware(handle: SetupHandle) {
   if (!isSetupHandle(handle)) {
@@ -86,6 +89,10 @@ function koaMiddleware(handle: SetupHandle) {
       baseUrl: opts.baseUrl,
       prefix: opts.requestIdPrefix,
       recovery,
+      fingerprint: fingerprint?.key,
+      strategy: fingerprint?.strategy,
+      method: ctx.method,
+      path: routePattern,
       docsUrl: engine.docsUrl,
     });
     for (const [k, v] of Object.entries(debug.headers)) ctx.set(k, v);
@@ -117,8 +124,8 @@ function koaMiddleware(handle: SetupHandle) {
           typeof ctx.request.body === "string"
             ? ctx.request.body
             : ctx.request.body
-            ? JSON.stringify(ctx.request.body)
-            : undefined,
+              ? JSON.stringify(ctx.request.body)
+              : undefined,
       },
       response: {
         status: ctx.status,

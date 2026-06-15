@@ -9,7 +9,10 @@ import {
   resolveBlock,
   type SetupHandle,
 } from "./_shared.js";
-import { makeAdapterClient, type AdapterClient } from "../lib/adapterFactory.js";
+import {
+  makeAdapterClient,
+  type AdapterClient,
+} from "../lib/adapterFactory.js";
 
 function honoMiddleware(handle: SetupHandle) {
   if (!isSetupHandle(handle)) {
@@ -90,6 +93,10 @@ function honoMiddleware(handle: SetupHandle) {
       baseUrl: opts.baseUrl,
       prefix: opts.requestIdPrefix,
       recovery,
+      fingerprint: fingerprint?.key,
+      strategy: fingerprint?.strategy,
+      method: req.method,
+      path: c.req.routePath,
       docsUrl: engine.docsUrl,
     });
     for (const [k, v] of Object.entries(debug.headers)) c.header(k, v);

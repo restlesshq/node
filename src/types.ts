@@ -122,7 +122,14 @@ export interface CapturedRequest {
    * for status >= 400. See `lib/fingerprint.ts` and `docs/INTERNALS.md`.
    */
   errorFingerprint?: {
-    strategy: "header" | "body-code" | "stack" | "message" | "route-only";
+    strategy:
+      | "resource"
+      | "endpoint"
+      | "header"
+      | "body-code"
+      | "stack"
+      | "message"
+      | "route-only";
     key: string;
     reason: string;
   };

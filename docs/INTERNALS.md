@@ -129,15 +129,19 @@ Falsy input returns `undefined` rather than hashing a placeholder. When neither 
 
 **This is a cross-SDK contract**, the same way `mask()` is. If the algorithm changes here, every other SDK port (Python, Ruby, PHP, ...) and any stored fingerprints have to move with it. Don't change it in isolation.
 
-Five strategies are tried in priority order; the first that yields a key wins:
+Strategies are tried in priority order; the first that yields a key wins. 404 is handled up front (step 0) because it's resource-oriented, not code-oriented — see below.
 
-| # | strategy     | when it fires                                                       | key shape                            |
-|---|--------------|---------------------------------------------------------------------|--------------------------------------|
-| 1 | `header`     | response has `x-restless-error-code` header (case-insensitive)      | `{status}:{code}`                    |
-| 2 | `body-code`  | response body has `code`, `error_code`, `errorCode`, `type`, or nested `error.code`/`error.type`/`error.error_code` that looks like an identifier (`/^[A-Za-z][\w.\-]*$/`, ≤64 chars) | `{status}:{code}`                    |
-| 3 | `stack`      | `status >= 500` and a stack trace is available; uses the topmost frame that isn't `node_modules`, `node:internal`, or `@restlessai/sdk` | `{status}:{file}:{fn}`               |
-| 4 | `message`    | response body has an extractable `message` (top-level, `error.message`, or string `error`) | `{status}:{method}:{route}:{normalized message}` |
-| 5 | `route-only` | nothing usable                                                       | `{status}:{method}:{route}`          |
+| # | strategy        | when it fires                                                       | key shape                            |
+|---|-----------------|---------------------------------------------------------------------|--------------------------------------|
+| 0a | `resource`     | `status == 404` AND the route has a path parameter (`:id`/`{id}`)   | `404:resource` (constant)            |
+| 0b | `endpoint`     | `status == 404` with no path parameter (paramless route or no match)| `404:endpoint` (constant)            |
+| 1 | `header`        | response has `x-restless-error-code` header (case-insensitive)      | `{status}:{code}`                    |
+| 2 | `body-code`     | response body has `code`, `error_code`, `errorCode`, `type`, or nested `error.code`/`error.type`/`error.error_code` that looks like an identifier (`/^[A-Za-z][\w.\-]*$/`, ≤64 chars) | `{status}:{code}`                    |
+| 3 | `stack`         | `status >= 500` and a stack trace is available; uses the topmost frame that isn't `node_modules`, `node:internal`, or `@restlessai/sdk` | `{status}:{file}:{fn}`               |
+| 4 | `message`       | response body has an extractable `message` (top-level, `error.message`, or string `error`) | `{status}:{method}:{route}:{normalized message}` |
+| 5 | `route-only`    | nothing usable                                                       | `{status}:{method}:{route}`          |
+
+**Why 404 is special (steps 0a/0b).** A generic `not_found` code (header or body) is the same on every route, so grouping all 404s by code is useless for recovery. There are exactly two kinds of 404, and they need opposite advice: a 404 on a route **with a path parameter** (`/car/{id}`) means the route is fine but the addressed resource is missing (fix: verify the id, list the parent collection); a 404 **without a path parameter** (a paramless route, or a path that matched no route at all) means the path/endpoint itself didn't resolve (fix: call a real endpoint). We key these to two **constant** strings (`404:resource`, `404:endpoint`), NOT per-route — the agent that receives the hint already knows the concrete path it called, so one general hint per kind is actionable, and a human authors only two 404 hints total instead of one per route. The signal is whether the normalized route contains a `:`/`{` template segment (`normalizeRoute` rewrites concrete ids to `:id` first; `route` is absent when nothing matched, which falls into `endpoint`). 404 is intercepted before the code-based strategies, so an `x-restless-error-code` on a 404 does not re-collapse it.
 
 Stability rules:
 
