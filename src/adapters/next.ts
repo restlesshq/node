@@ -14,7 +14,17 @@ import {
   type AdapterClient,
 } from "../lib/adapterFactory.js";
 
-type NextHandler = (req: Request, ctx?: any) => Promise<Response> | Response;
+// The request parameter is intentionally `any` (not `Request`): under
+// `strictFunctionTypes`, function parameters are contravariant, so a handler
+// typed `(req: NextRequest) => ...` is NOT assignable to `(req: Request) => ...`
+// even though NextRequest extends Request. App Router handlers must use
+// NextRequest (they read `req.nextUrl`), so a `Request` constraint rejects the
+// common case. `any` is a permissive gate that accepts Request, NextRequest,
+// and Pages Router handlers alike; `T extends NextHandler` still captures each
+// route's real signature (its NextRequest and async `{ params }` context) for
+// Next's generated route type-checker. The return is constrained to Response so
+// non-handlers are still rejected. `wrap` is identity at runtime.
+type NextHandler = (req: any, ...args: any[]) => Response | Promise<Response>;
 
 function nextWrapFactory(handle: SetupHandle) {
   if (!isSetupHandle(handle)) {
