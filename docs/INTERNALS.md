@@ -211,5 +211,6 @@ If `RESTLESS_KEY` (and `README_API_KEY`) are both unset when `restless()` is cal
 - **Upload failures:** swallowed. `DEBUG=restless` logs the status + body.
 - **Setup callback throws:** caught, falls back to the `.restless/settings.json` defaults for the request.
 - **Malformed `.restless/settings.json`:** returns `null` from the loader → no auto-config, no crash.
+- **Non-serializable request body:** the adapters that read an already-parsed body (Fastify `req.body`, Koa `ctx.request.body`) serialize it defensively. `multipart/form-data` bodies are skipped (a stringified parsed multipart body is meaningless), and any body that `JSON.stringify` can't handle - e.g. the circular structures `@fastify/multipart`'s `attachFieldsToBody` produces - is dropped to no recorded body rather than throwing. The Express/Hono/Next/http adapters capture the raw request stream, so they're unaffected.
 
 The overriding principle: observability never takes down the request path.

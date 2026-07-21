@@ -1,5 +1,35 @@
 import type { CapturedRequest, HarEntry } from "../types.js";
 
+/**
+ * Serialize an already-parsed request body for capture, defensively.
+ *
+ * Adapters that read the framework's parsed body (Fastify `req.body`, Koa
+ * `ctx.request.body`) can be handed values that `JSON.stringify` refuses:
+ * `@fastify/multipart` with `attachFieldsToBody` gives each file a `.fields`
+ * back-pointer, so the body is circular and `JSON.stringify` throws
+ * `TypeError: Converting circular structure to JSON`. In Fastify that throw
+ * lands inside the `onSend` hook and 500s the request — i.e. observability
+ * breaking the request path, which the SDK guarantees it never does.
+ *
+ * So: pass strings through untouched, skip multipart bodies (a stringified
+ * parsed multipart body is meaningless anyway), and swallow any other
+ * stringify failure down to `undefined` rather than throwing.
+ */
+export function safeStringifyReqBody(
+  body: unknown,
+  contentType?: string,
+): string | undefined {
+  if (typeof body === "string") return body;
+  if (!body) return undefined;
+  const ct = String(contentType || "").toLowerCase();
+  if (ct.includes("multipart/form-data")) return undefined;
+  try {
+    return JSON.stringify(body);
+  } catch {
+    return undefined;
+  }
+}
+
 function headersToList(
   headers: Record<string, string>,
 ): Array<{ name: string; value: string }> {

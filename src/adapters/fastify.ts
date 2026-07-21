@@ -14,6 +14,7 @@ import {
   makeAdapterClient,
   type AdapterClient,
 } from "../lib/adapterFactory.js";
+import { safeStringifyReqBody } from "../lib/har.js";
 
 /**
  * Marker Fastify reads on a plugin function: `true` means "skip the
@@ -181,12 +182,7 @@ async function restlessFastifyPlugin(fastify: any, handle: SetupHandle) {
         method: req.raw.method || "GET",
         url: state.fullUrl,
         headers: state.reqHeaders,
-        body:
-          typeof req.body === "string"
-            ? req.body
-            : req.body
-              ? JSON.stringify(req.body)
-              : undefined,
+        body: safeStringifyReqBody(req.body, state.reqHeaders["content-type"]),
       },
       response: {
         status: reply.statusCode,

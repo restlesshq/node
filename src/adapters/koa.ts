@@ -13,6 +13,7 @@ import {
   makeAdapterClient,
   type AdapterClient,
 } from "../lib/adapterFactory.js";
+import { safeStringifyReqBody } from "../lib/har.js";
 
 function koaMiddleware(handle: SetupHandle) {
   if (!isSetupHandle(handle)) {
@@ -120,12 +121,7 @@ function koaMiddleware(handle: SetupHandle) {
         method: ctx.method,
         url: fullUrl,
         headers: reqHeaders,
-        body:
-          typeof ctx.request.body === "string"
-            ? ctx.request.body
-            : ctx.request.body
-              ? JSON.stringify(ctx.request.body)
-              : undefined,
+        body: safeStringifyReqBody(ctx.request.body, reqHeaders["content-type"]),
       },
       response: {
         status: ctx.status,

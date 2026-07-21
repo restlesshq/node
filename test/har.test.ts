@@ -1,5 +1,41 @@
 import { describe, it, expect } from "vitest";
-import { toHarEntry } from "../src/lib/har.js";
+import { toHarEntry, safeStringifyReqBody } from "../src/lib/har.js";
+
+describe("safeStringifyReqBody", () => {
+  it("passes strings through untouched", () => {
+    expect(safeStringifyReqBody("already a string", "application/json")).toBe(
+      "already a string",
+    );
+  });
+
+  it("returns undefined for a nullish body", () => {
+    expect(safeStringifyReqBody(undefined)).toBeUndefined();
+    expect(safeStringifyReqBody(null)).toBeUndefined();
+  });
+
+  it("serializes plain objects", () => {
+    expect(safeStringifyReqBody({ a: 1 }, "application/json")).toBe('{"a":1}');
+  });
+
+  it("skips multipart/form-data bodies (a stringified parse is meaningless)", () => {
+    expect(
+      safeStringifyReqBody(
+        { field: "value" },
+        "multipart/form-data; boundary=----x",
+      ),
+    ).toBeUndefined();
+  });
+
+  it("drops a circular body to undefined instead of throwing", () => {
+    // Mirrors @fastify/multipart with attachFieldsToBody: each file has a
+    // .fields back-pointer to its siblings, so the body is circular.
+    const file: any = { type: "file", filename: "a.png" };
+    const fields: any = { schema: file };
+    file.fields = fields;
+    expect(() => safeStringifyReqBody(fields, "application/json")).not.toThrow();
+    expect(safeStringifyReqBody(fields, "application/json")).toBeUndefined();
+  });
+});
 
 describe("toHarEntry", () => {
   it("converts a CapturedRequest to a HAR 1.2 entry", () => {

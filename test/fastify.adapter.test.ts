@@ -147,6 +147,69 @@ describe("fastify adapter: hook ordering with user auth", () => {
     expect((req as any)._restless.setup).toBeNull();
   });
 
+  it("captures a circular multipart body without throwing (records body undefined)", async () => {
+    // Regression: @fastify/multipart with attachFieldsToBody gives each file
+    // a `.fields` back-pointer, so `req.body` is circular. Pre-fix,
+    // `JSON.stringify(req.body)` threw inside onSend, rejecting the hook and
+    // 500ing the request — the observability layer breaking the request path.
+    let uploaded: any;
+    const fetchImpl = vi.fn(async (_url: string, init: any) => {
+      uploaded = JSON.parse(init.body);
+      return { ok: true, text: async () => "" } as any;
+    });
+    const client = restless("rdme_test", {
+      baseUrl: "http://localhost:3003",
+      fetch: fetchImpl as unknown as typeof fetch,
+    });
+    const plugin = client.setup(() => ({ apiKey: "k" }));
+
+    const app = mockFastify();
+    await app.register(plugin);
+
+    // Build the circular body: body.schema.fields === body.
+    const file: any = { type: "file", filename: "a.png" };
+    const fields: any = { schema: file };
+    file.fields = fields;
+
+    const req: any = {
+      headers: {
+        host: "localhost",
+        "content-type": "multipart/form-data; boundary=----x",
+      },
+      raw: { socket: {}, method: "POST", url: "/upload" },
+      url: "/upload",
+      body: fields,
+    };
+    const resHeaders: Record<string, string> = {};
+    const reply: any = {
+      statusCode: 200,
+      header: (k: string, v: string) => {
+        resHeaders[k] = v;
+        return reply;
+      },
+      getHeaders: () => resHeaders,
+      code: () => reply,
+    };
+
+    for (const h of app.hooks.onRequest!) await h(req, reply);
+    for (const h of (app.hooks.preHandler || [])) await h(req, reply);
+
+    // The request completes normally: onSend returns the payload, no throw.
+    let out: unknown;
+    await expect(
+      (async () => {
+        for (const h of app.hooks.onSend!) out = await h(req, reply, "ok");
+      })(),
+    ).resolves.toBeUndefined();
+    expect(out).toBe("ok");
+
+    await client.flush();
+    expect(fetchImpl).toHaveBeenCalled();
+    const entry = uploaded[0].request.log.entries[0];
+    // No postData recorded because the body dropped to undefined.
+    expect(entry.request.postData).toBeUndefined();
+  });
+
   it("blocking in the setup callback short-circuits in preHandler", async () => {
     // The block API still works after the split. preHandler runs before
     // the route handler, so reply.code/.send from the SDK still wins.
