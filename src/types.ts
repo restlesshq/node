@@ -21,9 +21,11 @@ export interface OwnerDetails {
  * that will never change: a database primary key, a workspace UUID, a user
  * id. Never an API key, an email, a username, or any other rotatable value.
  *
- * `label`, `email`, etc. are optional cheap inline fields.
- * `enrich(id)` is an optional async resolver for expensive lookups; it's
- * only called on the first request from each id, then cached.
+ * `enrich(id)` is the ONLY way to attach owner metadata (display label,
+ * contact emails, plan tier, whatever). There are no inline `label` /
+ * `email` fields and no arbitrary extra keys on `owner` anymore — every
+ * piece of owner data flows through `enrich`. It runs once per id, then
+ * caches, so the lookup cost is amortized.
  */
 export interface OwnerSetup {
   /**
@@ -32,20 +34,18 @@ export interface OwnerSetup {
    */
   id?: string;
 
-  /** Cheap inline fields. Included on every request. */
-  label?: string;
-  email?: string | string[];
-
   /**
-   * Lazy resolver for expensive owner metadata (DB lookup, JWT verification,
-   * external HTTP call). Receives the owner id as an argument. Runs only
-   * on the first request from each id (or after server-driven invalidation),
-   * then cached. Return any additional fields to merge into the owner.
+   * Resolver for owner metadata (DB lookup, JWT verification, external HTTP
+   * call, or just fields read off the request via closure). Receives the
+   * owner id as an argument. Runs only on the first request from each id (or
+   * after server-driven invalidation), then cached. Return the fields to
+   * attach to this owner (`label`, `email`, and any extras).
+   *
+   * Required: it is the single channel for owner metadata. When a request
+   * has no owner (anonymous / public endpoint), omit `owner` entirely rather
+   * than supplying an `owner` without `enrich`.
    */
-  enrich?: (id: string) => OwnerDetails | Promise<OwnerDetails>;
-
-  /** Any extra fields are preserved on the log. */
-  [key: string]: unknown;
+  enrich: (id: string) => OwnerDetails | Promise<OwnerDetails>;
 }
 
 /**
@@ -64,7 +64,7 @@ export type ProjectSetup = OwnerSetup;
 export interface UserContext {
   /** Masked end-user API key. */
   apiKey?: string;
-  /** Resolved owner: `id` plus cheap inline fields plus anything `enrich` returned. */
+  /** Resolved owner: `id` plus whatever `enrich` returned. */
   project?: OwnerDetails & { id?: string };
   [key: string]: unknown;
 }
@@ -73,7 +73,7 @@ export interface UserContext {
  * What the user returns from `setup(cb)` on every request.
  *
  * Keep top-level fields CHEAP (straight from the request — header, cookie,
- * JWT claim). Put anything expensive inside `owner.enrich(id)`; the SDK
+ * JWT claim). All owner metadata goes through `owner.enrich(id)`; the SDK
  * calls it lazily and dedups by owner id.
  */
 export interface SetupResult {

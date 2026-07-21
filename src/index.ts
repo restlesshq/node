@@ -65,7 +65,11 @@ export interface RestlessClient {
  *     const restless = require('@restlessai/sdk')(process.env.RESTLESS_KEY);
  *     app.use(restless.setup((req) => ({
  *       apiKey: restless.mask(req.headers.authorization),
- *       owner: { id: req.user.workspaceId },
+ *       owner: {
+ *         id: req.user.workspaceId,
+ *         // enrich is the only channel for owner metadata; runs once per id.
+ *         enrich: async (id) => ({ label: (await db.workspaces.findById(id)).name }),
+ *       },
  *     })));
  */
 function restless(apiKey?: string, opts: ClientOptions = {}): RestlessClient {
