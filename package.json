@@ -64,6 +64,7 @@
     "dev": "tsup --watch",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:e2e:next": "npm run build && npm --prefix test/fixtures/next-app install && node test/fixtures/next-app/e2e.mjs && node test/fixtures/next-app/e2e.mjs --webpack",
     "typecheck": "tsc --noEmit"
   },
   "keywords": [

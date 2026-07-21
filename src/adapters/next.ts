@@ -15,6 +15,8 @@ import {
 } from "../lib/adapterFactory.js";
 
 export { withRestless, type WithRestlessOptions } from "./next-plugin.js";
+// Standalone mask for restless.config.ts, where no client instance exists.
+export { mask } from "../lib/mask.js";
 
 // The request parameter is intentionally `any` (not `Request`): under
 // `strictFunctionTypes`, function parameters are contravariant, so a handler

@@ -156,13 +156,12 @@ function apply<C extends NextConfigLike>(
   }
 
   const exts = cfg.pageExtensions?.length ? cfg.pageExtensions : DEFAULT_EXTS;
-  const loaderOptions: RestlessLoaderOptions = {
-    configPath,
-    projectRoot: root,
-    exclude: options.exclude,
-    debug: options.debug,
-    exts,
-  };
+  // No undefined values: Turbopack requires loader options to be strictly
+  // serializable and rejects objects with undefined-valued keys.
+  const loaderOptions: RestlessLoaderOptions = { projectRoot: root, exts };
+  if (configPath) loaderOptions.configPath = configPath;
+  if (options.exclude?.length) loaderOptions.exclude = options.exclude;
+  if (options.debug) loaderOptions.debug = options.debug;
   const loaderPath = resolveLoaderPath();
   const nextVersion = options.nextVersion ?? resolveNextVersion(root);
   const bundler = options.bundler ?? detectBundler(nextVersion);
