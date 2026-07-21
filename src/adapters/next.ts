@@ -1,4 +1,4 @@
-import type { ClientOptions, SetupCallback } from "../types.js";
+import type { ClientOptions, SetupResult } from "../types.js";
 import {
   isSetupHandle,
   newRequestId,
@@ -243,8 +243,14 @@ export interface RestlessNextConfig {
    * Per-request identity resolution. Receives the route's web `Request`
    * (a `NextRequest` at runtime). Same contract as `setup(cb)` everywhere
    * else: return `{ apiKey, owner, block }`.
+   *
+   * Declared as a METHOD on purpose: method parameters are checked
+   * bivariantly under `strictFunctionTypes`, so callbacks typed with
+   * `NextRequest` (a Request subtype) are accepted — an arrow-function
+   * property type would reject them. Same class of issue as the handler
+   * typing note above NextHandler.
    */
-  setup?: SetupCallback<Request>;
+  setup?(req: Request): SetupResult | Promise<SetupResult>;
   /** Overrides the env chain (RESTLESS_KEY → README_API_KEY → .env walk). */
   apiKey?: string;
   /** Name of the API in `.restless/settings.json`. Required when >1 defined. */

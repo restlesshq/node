@@ -114,4 +114,22 @@ describe("wrapRouteHandler typing (compile-only)", () => {
   test("defineConfig is identity over RestlessNextConfig", () => {
     expectTypeOf(config).toEqualTypeOf<RestlessNextConfig>();
   });
+
+  test("setup accepts a NextRequest-typed callback (bivariance regression guard)", () => {
+    // Real-world configs type the param as NextRequest to read req.nextUrl.
+    // `setup` is declared as a method so this stays assignable under
+    // strictFunctionTypes; an arrow-property declaration would reject it.
+    defineConfig({
+      setup: async (req: NextRequest) => ({
+        apiKey: req.nextUrl.searchParams.get("key") ?? undefined,
+      }),
+    });
+    // Untyped params still contextually infer the web Request.
+    defineConfig({
+      setup: (req) => {
+        expectTypeOf(req).toEqualTypeOf<Request>();
+        return {};
+      },
+    });
+  });
 });
