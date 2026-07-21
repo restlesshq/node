@@ -415,7 +415,8 @@ interface ClientOptions {
 - Expecting an SDK-level `modifyBody` / `headers` hook. They don't exist (§9).
 - Wrapping Next.js Pages-Router handlers with the App-Router adapter, or vice versa. `@restlessai/sdk/next` expects App-Router `Request/Response` (and `withRestless` auto-wraps App Router routes only).
 - Manually wrapping route handlers in a Next.js app that already uses `withRestless`. Harmless (the double-wrap guard captures once) but redundant — delete the per-route wraps when migrating.
-- Putting expensive top-level work in `restless.config.ts`. It's bundled into every route's server chunk; keep it to the `defineConfig` call and cheap imports.
+- Putting heavy imports at the top of `restless.config.ts`. The file is bundled into EVERY route's server chunk, and `next build` evaluates route modules while collecting page data — a top-level import of DB-backed code (mongoose clients that throw without env, etc.) breaks builds for routes that never touched the DB. Import auth/DB helpers dynamically inside the callback instead: `const { authenticate } = await import('@/lib/auth')`.
+- Testing an unpublished SDK build in a Next app via `npm install <dir>` / `npm link`. The symlink target usually lives outside `turbopack.root`, and Turbopack won't resolve files that escape the root ("module not found" for the SDK). Use `npm pack` and install the tarball instead.
 
 ## 15. Quick verification after installation
 
