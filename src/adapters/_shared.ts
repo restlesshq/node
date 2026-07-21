@@ -204,9 +204,14 @@ export function lookupErrorRecovery(
   return { fingerprint, recovery };
 }
 
-/** Resolve the block config into a concrete response spec. */
+/**
+ * Resolve the block config into a concrete response spec. Takes only the
+ * `block` field so it accepts both the raw `SetupResult` and the resolved
+ * setup the engine returns (whose `project` is already enriched, not an
+ * `OwnerSetup`, so the full `SetupResult` shape no longer matches).
+ */
 export function resolveBlock(
-  setup: SetupResult,
+  setup: Pick<SetupResult, "block">,
 ): { status: number; message: string } | null {
   if (!setup.block) return null;
   if (setup.block === true) return { status: 403, message: "Forbidden" };

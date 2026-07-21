@@ -194,29 +194,35 @@ export class CaptureEngine {
       return rest as ResolvedSetup;
     }
 
-    const { enrich, ...inlineOwner } = raw;
-    const cacheKey = raw.id || rest.apiKey;
+    // Owner metadata flows exclusively through `enrich` now — the only
+    // field we carry off the raw owner is `id`. Any other inline keys the
+    // caller put on `owner` are intentionally dropped (they used to be
+    // supported; `enrich` is the single channel now).
+    const { enrich, id } = raw;
+    const baseOwner: OwnerDetails & { id?: string } =
+      id !== undefined ? { id } : {};
+    const cacheKey = id || rest.apiKey;
 
     // We cache the enriched VALUE (not just a freshness marker) so
-    // every upload carries user metadata, even when we skip running
+    // every upload carries owner metadata, even when we skip running
     // the (potentially expensive) enrich callback. Without this every
     // request after the first would land in the dashboard as
     // "unauthenticated", since the server has no way to backfill.
-    if (typeof enrich === "function" && raw.id && cacheKey) {
+    if (typeof enrich === "function" && id && cacheKey) {
       const cached = this.enrichCache.get(cacheKey);
       if (cached) {
         return {
           ...rest,
-          project: { ...inlineOwner, ...cached },
+          project: { ...baseOwner, ...cached },
         } as ResolvedSetup;
       }
       try {
-        const enriched = await enrich(raw.id);
+        const enriched = await enrich(id);
         if (enriched && typeof enriched === "object") {
           this.enrichCache.set(cacheKey, enriched as Record<string, unknown>);
           return {
             ...rest,
-            project: { ...inlineOwner, ...enriched },
+            project: { ...baseOwner, ...enriched },
           } as ResolvedSetup;
         }
       } catch {
@@ -224,7 +230,9 @@ export class CaptureEngine {
       }
     }
 
-    return { ...rest, project: inlineOwner } as ResolvedSetup;
+    // No enrich ran (missing id, no enrich fn, or it returned nothing):
+    // ship just the id so the dashboard can still group by it.
+    return { ...rest, project: baseOwner } as ResolvedSetup;
   }
 
   /** Redact + truncate, then enqueue. */

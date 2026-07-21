@@ -86,22 +86,20 @@ describe("CaptureEngine: project.enrich flow", () => {
     });
   });
 
-  it("merges inline project fields with enrich() output on first-seen", async () => {
+  it("ignores stray inline owner fields — enrich is the only metadata source", async () => {
     const { engine } = mkEngine();
     const enrich = vi.fn().mockResolvedValue({ email: "enriched@acme.co" });
     engine.setCallback(() => ({
       apiKey: "sha512-xxx?1234",
-      project: {
-        id: "acme-id",
-        label: "Acme (inline)", // inline cheap field
-        enrich,
-      },
+      // `label` here mimics an old JS caller still passing an inline field.
+      // It must be dropped: enrich is the sole channel for owner metadata,
+      // so only `id` plus enrich's output survive on the resolved owner.
+      project: { id: "acme-id", label: "Acme (inline)", enrich } as any,
     }));
 
     const first = await engine.resolve({ method: "GET", url: "/", headers: {} });
     expect(first.project).toEqual({
       id: "acme-id",
-      label: "Acme (inline)",
       email: "enriched@acme.co",
     });
   });
@@ -148,13 +146,14 @@ describe("CaptureEngine: project.enrich flow", () => {
     const enrich = vi.fn().mockRejectedValue(new Error("db down"));
     engine.setCallback(() => ({
       apiKey: "sha512-xxx?1234",
-      project: { id: "acme-id", label: "Acme", enrich },
+      project: { id: "acme-id", enrich },
     }));
 
     const result = await engine.resolve({ method: "GET", url: "/", headers: {} });
     expect(result.apiKey).toBe("sha512-xxx?1234");
-    // Inline field survived; enrich failed silently
-    expect(result.project).toEqual({ id: "acme-id", label: "Acme" });
+    // enrich failed silently; the owner still ships with its id so the
+    // request path is never broken.
+    expect(result.project).toEqual({ id: "acme-id" });
   });
 
   it("skips enrich when project.id is missing", async () => {
@@ -169,19 +168,17 @@ describe("CaptureEngine: project.enrich flow", () => {
     expect(enrich).not.toHaveBeenCalled();
   });
 
-  it("works with a project that has no enrich (inline-only)", async () => {
+  it("ships just the id when there's no enrich (defensive: old JS caller)", async () => {
     const { engine } = mkEngine();
     engine.setCallback(() => ({
       apiKey: "sha512-xxx?1234",
-      project: { id: "acme-id", label: "Acme", email: "a@b.co" },
+      // No enrich. The type requires it, but an old JS caller might omit it;
+      // resolve() must stay defensive and ship the id alone rather than throw.
+      project: { id: "acme-id" } as any,
     }));
 
     const result = await engine.resolve({ method: "GET", url: "/", headers: {} });
-    expect(result.project).toEqual({
-      id: "acme-id",
-      label: "Acme",
-      email: "a@b.co",
-    });
+    expect(result.project).toEqual({ id: "acme-id" });
   });
 
   it("invalidates via the uploader response end-to-end", async () => {

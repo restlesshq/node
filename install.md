@@ -48,12 +48,22 @@ const restless = require('@restlessai/sdk')(process.env.RESTLESS_KEY);
 
 All examples below use `req.user.workspaceId` as a placeholder for the customer's stable, immutable internal id. Replace it with whatever your auth middleware attaches: a workspace uuid, tenant id, or user pk. See [§4.1](#the-owner-block) for how to pick.
 
+Owner metadata (display label, contact emails, anything else) flows through `owner.enrich` — that is the only channel for it, and it is required whenever you set an owner. To keep the per-framework snippets short, they share this resolver:
+
+```js
+// Runs once per owner id, then caches. Reuse your project's own data access.
+const enrichOwner = async (id) => {
+  const workspace = await db.workspaces.findById(id);
+  return { label: workspace.name, email: workspace.adminEmails };  // string or string[]
+};
+```
+
 ### Express
 
 ```js
 app.use(restless.setup((req) => ({
   apiKey: restless.mask(req.headers.authorization),
-  owner: { id: req.user.workspaceId },
+  owner: { id: req.user.workspaceId, enrich: enrichOwner },
 })));
 ```
 
@@ -64,7 +74,7 @@ app.use(restless.setup((req) => ({
 ```js
 await fastify.register(restless.setup((req) => ({
   apiKey: restless.mask(req.headers.authorization),
-  owner: req.user ? { id: req.user.workspaceId } : undefined,
+  owner: req.user ? { id: req.user.workspaceId, enrich: enrichOwner } : undefined,
 })));
 ```
 
@@ -75,7 +85,7 @@ The SDK plugin uses two Fastify hooks: `onRequest` (mints request ID, sets respo
 ```js
 app.use(restless.setup((ctx) => ({
   apiKey: restless.mask(ctx.request.headers.authorization),
-  owner: { id: ctx.state.user.workspaceId },
+  owner: { id: ctx.state.user.workspaceId, enrich: enrichOwner },
 })));
 ```
 
@@ -84,7 +94,7 @@ app.use(restless.setup((ctx) => ({
 ```js
 app.use(restless.setup((c) => ({
   apiKey: restless.mask(c.req.header('authorization')),
-  owner: { id: c.get('user').workspaceId },
+  owner: { id: c.get('user').workspaceId, enrich: enrichOwner },
 })));
 ```
 
@@ -99,7 +109,7 @@ export const client = restless(process.env.RESTLESS_KEY!);
 import { client } from '../../lib/restless';
 const wrap = client.setup(async (req) => ({
   apiKey: client.mask(req.headers.get('authorization')),
-  owner: { id: (await getSessionUser(req)).workspaceId },
+  owner: { id: (await getSessionUser(req)).workspaceId, enrich: enrichOwner },
 }));
 export const GET  = wrap(async () => Response.json({ ok: true }));
 export const POST = wrap(async () => Response.json({ ok: true }));
@@ -156,31 +166,31 @@ Extra top-level fields are preserved and stored on the log.
 ```js
 return {
   apiKey: restless.mask(extractApiKey(req)),
-  owner: req.user ? { id: req.user.workspaceId } : undefined,
+  owner: req.user ? { id: req.user.workspaceId, enrich: enrichOwner } : undefined,
 };
 ```
 
 ```ts
 interface OwnerSetup {
-  id:      string;                // permanent, immutable (see above)
-  label?:  string;                // cheap inline
-  email?:  string | string[];     // cheap inline
-  enrich?: (id: string) => OwnerDetails | Promise<OwnerDetails>;  // lazy
-  [key: string]: unknown;
+  id:      string;  // permanent, immutable (see above)
+  // The only channel for owner metadata. Required whenever you set an owner.
+  enrich:  (id: string) => OwnerDetails | Promise<OwnerDetails>;
 }
 
 interface OwnerDetails {
   label?: string;
   email?: string | string[];
-  [key: string]: unknown;
+  [key: string]: unknown;  // any extra fields are preserved on the log
 }
 ```
 
+There are no inline `label` / `email` fields (or arbitrary extra keys) on `owner` anymore. Everything except `id` comes back from `enrich`.
+
 ### What's cheap vs expensive
 
-Top-level `apiKey` and all inline fields under `owner` (id, label, email, whatever extras you add) are **cheap** and included on every request.
+Top-level `apiKey` and `owner.id` are **cheap** and included on every request.
 
-`owner.enrich(id)` is **expensive**. The SDK calls it only on the first request from each `owner.id`, then caches until the server asks for a refresh.
+`owner.enrich(id)` is **expensive**. The SDK calls it only on the first request from each `owner.id`, then caches until the server asks for a refresh. Its resolved fields are cached and re-attached to every subsequent upload, so each log still carries full owner metadata without re-running the lookup.
 
 ### Lazy owner enrichment
 
@@ -209,9 +219,9 @@ Behavior:
 
 - Cached by `owner.id`. First request from each owner triggers `enrich`; subsequent requests skip it.
 - If the server responds to an upload with `needsEnrichment: [<owner.id>]`, that owner is invalidated and the next request from it re-runs `enrich`.
-- `enrich` errors are swallowed. The log still ships with the inline fields.
+- `enrich` errors are swallowed. The log still ships with the `owner.id`.
 - `enrich` runs only when `owner.id` is set (there's nothing to cache under otherwise).
-- Inline fields (`label`, `email` outside `enrich`) are sent on every request, so they survive cache hits even if `enrich` never fires.
+- The values `enrich` returned are cached and re-attached to every subsequent upload from that owner, so each log carries full owner metadata without re-running the lookup.
 
 ## 5. The `mask()` gotcha
 

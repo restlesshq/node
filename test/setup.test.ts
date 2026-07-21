@@ -35,7 +35,7 @@ describe("restless() factory + setup()", () => {
     const client = restless("rdme_test");
     const cb = vi.fn().mockResolvedValue({
       apiKey: "masked",
-      project: { id: "acme", label: "Acme" },
+      project: { id: "acme", enrich: async () => ({ label: "Acme" }) },
     });
     client.setup(cb);
     const result = await client.engine.resolve({
