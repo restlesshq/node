@@ -14,6 +14,8 @@ import {
   type AdapterClient,
 } from "../lib/adapterFactory.js";
 
+export { withRestless, type WithRestlessOptions } from "./next-plugin.js";
+
 // The request parameter is intentionally `any` (not `Request`): under
 // `strictFunctionTypes`, function parameters are contravariant, so a handler
 // typed `(req: NextRequest) => ...` is NOT assignable to `(req: Request) => ...`
