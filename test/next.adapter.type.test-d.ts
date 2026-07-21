@@ -1,5 +1,9 @@
 import { describe, test, expectTypeOf } from "vitest";
-import restlessNext from "../src/adapters/next.js";
+import restlessNext, {
+  wrapRouteHandler,
+  defineConfig,
+  type RestlessNextConfig,
+} from "../src/adapters/next.js";
 
 /**
  * Compile-only type fixture for the Next.js adapter.
@@ -77,5 +81,37 @@ describe("next adapter typing (compile-only)", () => {
     expectTypeOf(GET).toEqualTypeOf<typeof getHandler>();
     expectTypeOf(POST).toEqualTypeOf<typeof slugHandler>();
     expectTypeOf(PUT).toEqualTypeOf<typeof plainHandler>();
+  });
+});
+
+describe("wrapRouteHandler typing (compile-only)", () => {
+  const config = defineConfig({
+    setup: (req) => {
+      // The setup callback receives the web Request.
+      expectTypeOf(req).toEqualTypeOf<Request>();
+      return { apiKey: "k" };
+    },
+  });
+
+  test("identity over the handler's exact signature, same as wrap", () => {
+    expectTypeOf(wrapRouteHandler(getHandler, config, "GET")).toEqualTypeOf<
+      typeof getHandler
+    >();
+    expectTypeOf(wrapRouteHandler(slugHandler, config)).toEqualTypeOf<
+      typeof slugHandler
+    >();
+    expectTypeOf(wrapRouteHandler(plainHandler)).toEqualTypeOf<
+      typeof plainHandler
+    >();
+  });
+
+  test("undefined passes through as undefined (facade absent-method case)", () => {
+    expectTypeOf(wrapRouteHandler(undefined, config, "GET")).toEqualTypeOf<
+      undefined
+    >();
+  });
+
+  test("defineConfig is identity over RestlessNextConfig", () => {
+    expectTypeOf(config).toEqualTypeOf<RestlessNextConfig>();
   });
 });
