@@ -235,6 +235,54 @@ describe("pass-through cases", () => {
     expect(wrapped).toContain("__restless_wrap");
   });
 
+  it("include allowlist wraps only matching route files", () => {
+    const opts = { include: ["app/api/v1/**"] };
+    const { output: wrapped } = runLoader(BASIC, {
+      resourcePath: `${ROOT}/app/api/v1/me/route.ts`,
+      options: opts,
+    });
+    expect(wrapped).toContain("__restless_wrap");
+    for (const resourcePath of [
+      `${ROOT}/app/api/internal/route.ts`,
+      `${ROOT}/app/healthz/route.ts`,
+    ]) {
+      const { output } = runLoader(BASIC, { resourcePath, options: opts });
+      expect(output, resourcePath).toBe(BASIC);
+    }
+  });
+
+  it("include/exclude globs match with or without the src/ prefix", () => {
+    // `app/...` glob matches a src/app layout...
+    const { output: srcLayout } = runLoader(BASIC, {
+      resourcePath: `${ROOT}/src/app/api/v1/me/route.ts`,
+      options: { include: ["app/api/v1/**"] },
+    });
+    expect(srcLayout).toContain("__restless_wrap");
+    // ...and a `src/app/...` glob matches too.
+    const { output: explicit } = runLoader(BASIC, {
+      resourcePath: `${ROOT}/src/app/api/v1/me/route.ts`,
+      options: { include: ["src/app/api/v1/**"] },
+    });
+    expect(explicit).toContain("__restless_wrap");
+    // Same normalization for exclude.
+    const { output: excluded } = runLoader(BASIC, {
+      resourcePath: `${ROOT}/src/app/api/health/route.ts`,
+      options: { exclude: ["app/api/health/**"] },
+    });
+    expect(excluded).toBe(BASIC);
+  });
+
+  it("exclude wins over include on overlap", () => {
+    const { output } = runLoader(BASIC, {
+      resourcePath: `${ROOT}/app/api/v1/internal/route.ts`,
+      options: {
+        include: ["app/api/v1/**"],
+        exclude: ["app/api/v1/internal/**"],
+      },
+    });
+    expect(output).toBe(BASIC);
+  });
+
   it("honors the restless-disable escape comment", () => {
     for (const comment of [
       "// restless-disable",

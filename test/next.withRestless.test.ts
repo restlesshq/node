@@ -243,13 +243,18 @@ describe("config forms and discovery", () => {
     expect((out as any).webpack).toBeUndefined();
   });
 
-  it("exclude globs flow through to loader options", () => {
+  it("include and exclude globs flow through to loader options", () => {
     const out = withRestless(
       {},
-      opts({ exclude: ["app/api/health/**"] }),
+      opts({ include: ["app/api/v1/**"], exclude: ["app/api/health/**"] }),
     );
-    expect(runWebpack(out).module.rules[0].use[0].options.exclude).toEqual([
-      "app/api/health/**",
-    ]);
+    const loaderOpts = runWebpack(out).module.rules[0].use[0].options;
+    expect(loaderOpts.include).toEqual(["app/api/v1/**"]);
+    expect(loaderOpts.exclude).toEqual(["app/api/health/**"]);
+    // Absent lists are omitted entirely (Turbopack serialization).
+    const bare = withRestless({}, opts());
+    const bareOpts = runWebpack(bare).module.rules[0].use[0].options;
+    expect("include" in bareOpts).toBe(false);
+    expect("exclude" in bareOpts).toBe(false);
   });
 });

@@ -118,7 +118,7 @@ export default defineConfig({
 
 **Support matrix:** webpack builds on Next ≥ 13.4; Turbopack builds on Next ≥ 15.3 (older Turbopack setups get a build warning and no capture). Routes with `export const runtime = 'edge'` are skipped with a build warning (current limitation). Prerendered/static routes (`dynamic = 'force-static'`) serve from cache and are not captured; SSE (`text/event-stream`) and >1 MB bodies are captured without the body.
 
-**Opting routes out:** `withRestless(cfg, { exclude: ['app/api/health/**'] })`, or put `// restless-disable` at the top of a route file.
+**Scoping capture:** by default every App Router route handler is wrapped. `withRestless(cfg, { include: ['app/api/v1/**'] })` restricts wrapping to an allowlist (the right tool when only a public API subtree should be captured); `exclude: ['app/api/health/**']` skips specific routes and wins over `include` on overlap. Globs are project-root-relative and match with or without a leading `src/`. A `// restless-disable` comment at the top of a route file opts out that single file.
 
 **Manual wrapping (escape hatch / legacy):** the per-route API still works, e.g. for a file the loader punts on (`export *` re-exports). Mixing manual and auto wrapping is safe — a handler is never captured twice.
 

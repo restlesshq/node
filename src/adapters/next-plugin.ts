@@ -33,6 +33,13 @@ const CONFIG_BASENAMES = [
 ];
 
 export interface WithRestlessOptions {
+  /**
+   * Allowlist: when set, ONLY route files matching one of these
+   * root-relative posix globs are wrapped, e.g. `["app/api/v1/**"]` to
+   * scope capture to a public API subtree. Globs match with or without a
+   * leading `src/`. `exclude` still wins on overlap.
+   */
+  include?: string[];
   /** Root-relative posix globs of route files to leave unwrapped. */
   exclude?: string[];
   /** Override restless.config.* discovery (absolute or root-relative). */
@@ -160,6 +167,7 @@ function apply<C extends NextConfigLike>(
   // serializable and rejects objects with undefined-valued keys.
   const loaderOptions: RestlessLoaderOptions = { projectRoot: root, exts };
   if (configPath) loaderOptions.configPath = configPath;
+  if (options.include?.length) loaderOptions.include = options.include;
   if (options.exclude?.length) loaderOptions.exclude = options.exclude;
   if (options.debug) loaderOptions.debug = options.debug;
   const loaderPath = resolveLoaderPath();

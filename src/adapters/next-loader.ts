@@ -32,6 +32,12 @@ export interface RestlessLoaderOptions {
   configPath?: string;
   /** Absolute path of the Next project root (where app/ or src/app lives). */
   projectRoot: string;
+  /**
+   * Root-relative posix globs. When set, ONLY matching route files are
+   * wrapped (an allowlist — e.g. `["app/api/v1/**"]` to scope capture to a
+   * public API subtree). `exclude` still wins on overlap.
+   */
+  include?: string[];
   /** Root-relative posix globs of route files to leave unwrapped. */
   exclude?: string[];
   /** Log every wrap/skip decision at build time. */
@@ -271,9 +277,20 @@ function restlessLoader(this: LoaderContext, source: string): string {
   const base = rel.split("/").pop()!;
   if (!exts.some((ext) => base === `route.${ext}`)) return source;
 
-  // 4. User excludes.
+  // 4. User include/exclude scoping. Globs match the root-relative path
+  //    with or without the `src/` prefix, so `app/api/**` works in both
+  //    project layouts. Exclude wins over include.
+  const relNoSrc = rel.replace(/^src\//, "");
+  const matchesGlob = (glob: string) => {
+    const re = globToRegExp(glob);
+    return re.test(rel) || re.test(relNoSrc);
+  };
+  if (opts.include?.length && !opts.include.some(matchesGlob)) {
+    debug(`skip (not in include): ${rel}`);
+    return source;
+  }
   for (const glob of opts.exclude || []) {
-    if (globToRegExp(glob).test(rel)) {
+    if (matchesGlob(glob)) {
       debug(`skip (excluded): ${rel}`);
       return source;
     }
