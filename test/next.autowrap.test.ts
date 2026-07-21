@@ -235,6 +235,47 @@ describe("body-capture guards", () => {
   });
 });
 
+describe("owner enrichment through wrapRouteHandler", () => {
+  it("runs enrich once per owner id and merges it into every upload", async () => {
+    const enrich = vi.fn(async (id: string) => ({
+      label: `Workspace ${id}`,
+      email: "admin@example.com",
+    }));
+    const { config, fetchImpl } = mkConfig({
+      setup: () => ({
+        apiKey: "masked-key",
+        owner: { id: "ws_7", plan: "pro", enrich },
+      }),
+    });
+    const GET = wrapRouteHandler(
+      async () => Response.json({ ok: true }),
+      config,
+    );
+
+    await GET(new Request("http://localhost/api/a"));
+    await GET(new Request("http://localhost/api/b"));
+
+    // Test env flushes each record immediately → one upload per request.
+    await vi.waitFor(() =>
+      expect(fetchImpl.mock.calls.length).toBeGreaterThanOrEqual(2),
+    );
+    expect(enrich).toHaveBeenCalledTimes(1);
+    expect(enrich).toHaveBeenCalledWith("ws_7");
+
+    const payloads = fetchImpl.mock.calls.flatMap(([, init]) =>
+      JSON.parse((init as RequestInit).body as string),
+    );
+    expect(payloads).toHaveLength(2);
+    for (const payload of payloads) {
+      expect(payload.group.id).toBe("ws_7");
+      // Enriched fields ride on BOTH uploads — the second comes from the
+      // engine's value cache, not a re-run of enrich.
+      expect(payload.group.label).toBe("Workspace ws_7");
+      expect(payload.group.emails).toEqual(["admin@example.com"]);
+    }
+  });
+});
+
 describe("error debug injection still applies through wrapRouteHandler", () => {
   it("injects debug block + x-log-url on 4xx JSON responses", async () => {
     const { config } = mkConfig();
