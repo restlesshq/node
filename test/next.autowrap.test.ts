@@ -221,6 +221,55 @@ describe("body-capture guards", () => {
     expect(payload[0].request.log.entries[0].request.postData).toBeUndefined();
   });
 
+  it("serves binary responses byte-for-byte and captures them bodyless", async () => {
+    const { config, fetchImpl } = mkConfig();
+    // PNG magic + bytes that are NOT valid UTF-8: a decode/re-encode
+    // round-trip would corrupt them.
+    const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff, 0xfe]);
+    const GET = wrapRouteHandler(
+      async () =>
+        new Response(bytes, { headers: { "content-type": "image/png" } }),
+      config,
+    );
+
+    const res = await GET(new Request("http://localhost/api/image"));
+    expect(res.headers.get("x-request-id")).toBeDefined();
+    expect(new Uint8Array(await res.arrayBuffer())).toEqual(bytes);
+
+    const payload = await uploadedPayload(fetchImpl);
+    expect(payload[0].request.log.entries[0].response.content.text).toBe("");
+  });
+
+  it("passes bodies with no declared content-type through untouched", async () => {
+    const { config } = mkConfig();
+    const bytes = new Uint8Array([0x00, 0xc3, 0x28, 0xff]);
+    const GET = wrapRouteHandler(async () => new Response(bytes), config);
+    const res = await GET(new Request("http://localhost/api/raw"));
+    expect(new Uint8Array(await res.arrayBuffer())).toEqual(bytes);
+  });
+
+  it("drops a handler-set content-length when the debug injection grows the body", async () => {
+    const { config } = mkConfig();
+    const body = JSON.stringify({ error: "nope" });
+    const GET = wrapRouteHandler(
+      async () =>
+        new Response(body, {
+          status: 404,
+          headers: {
+            "content-type": "application/json",
+            "content-length": String(body.length),
+          },
+        }),
+      config,
+    );
+    const res = await GET(new Request("http://localhost/api/missing"));
+    // Stale length would truncate the enlarged body at clients.
+    expect(res.headers.get("content-length")).toBeNull();
+    const parsed = await res.json();
+    expect(parsed.error).toBe("nope");
+    expect(parsed.debug.log).toContain("/logs/");
+  });
+
   it("handles null-body statuses (204) without throwing", async () => {
     const { config } = mkConfig();
     const DELETE = wrapRouteHandler(

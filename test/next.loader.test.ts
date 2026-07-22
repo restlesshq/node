@@ -309,6 +309,11 @@ describe("pass-through cases", () => {
     // Node runtime is still wrapped.
     const { output } = runLoader(`${BASIC}\nexport const runtime = "nodejs";`);
     expect(output).toContain("__restless_wrap");
+    // A mid-line mention inside a string literal is not an edge route.
+    const { output: strLit } = runLoader(
+      `${BASIC}\nconst docs = 'set export const runtime = "edge" to move it';`,
+    );
+    expect(strLit).toContain("__restless_wrap");
   });
 
   it("punts on export * with a warning", () => {

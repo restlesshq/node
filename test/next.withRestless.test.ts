@@ -88,6 +88,21 @@ describe("webpack injection", () => {
     expect(order).toEqual(["user"]);
   });
 
+  it("tolerates user webpack fns that mutate in place and return undefined", () => {
+    const userCfg = {
+      webpack: (c: any) => {
+        c.module.rules.push({ marker: "user-rule" });
+        // no return — mutate-in-place pattern
+      },
+    };
+    const out = withRestless(userCfg, opts());
+    const wp = runWebpack(out);
+    expect(wp.module.rules.map((r: any) => r.marker ?? "restless")).toEqual([
+      "restless",
+      "user-rule",
+    ]);
+  });
+
   it("propagates custom pageExtensions into the rule and loader options", () => {
     const out = withRestless({ pageExtensions: ["mts", "ts"] }, opts());
     const wp = runWebpack(out);

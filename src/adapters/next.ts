@@ -47,18 +47,29 @@ function isRestlessWrapped(fn: unknown): boolean {
 }
 
 /**
- * Bodies we refuse to buffer for capture: SSE streams would make
- * `res.clone().text()` wait until the stream closes (potentially forever),
- * and megabyte-plus payloads get truncated by the engine anyway. The
- * capture still happens — headers stamped, log recorded — just bodyless.
+ * Bodies we read for capture: text-like content types only, bounded size,
+ * never SSE. Everything else still gets captured (headers stamped, log
+ * recorded) — just bodyless:
+ *
+ * - SSE would make `res.clone().text()` wait until the stream closes
+ *   (potentially forever).
+ * - Megabyte-plus payloads get truncated by the engine anyway.
+ * - Binary / unknown content types can't be represented as text: decoding
+ *   them yields garbage in the dashboard, and (for responses) the decoded
+ *   string must never be re-served — see the byte-for-byte pass-through in
+ *   the wrapper.
  */
 const MAX_CAPTURE_BODY_BYTES = 1024 * 1024;
+const TEXT_CONTENT_TYPE =
+  /json|text\/|xml|x-www-form-urlencoded|javascript|graphql/;
 
-function skipBodyCapture(headers: Record<string, string>): boolean {
+function isCapturableBody(headers: Record<string, string>): boolean {
   const ct = (headers["content-type"] || "").toLowerCase();
-  if (ct.includes("text/event-stream")) return true;
+  if (!ct) return false; // no declared type: assume bytes, don't decode
+  if (ct.includes("text/event-stream")) return false;
+  if (!TEXT_CONTENT_TYPE.test(ct)) return false;
   const len = Number(headers["content-length"]);
-  return Number.isFinite(len) && len > MAX_CAPTURE_BODY_BYTES;
+  return !(Number.isFinite(len) && len > MAX_CAPTURE_BODY_BYTES);
 }
 
 function nextWrapFactory(handle: SetupHandle) {
@@ -111,7 +122,7 @@ function nextWrapFactory(handle: SetupHandle) {
         req.body &&
         req.method !== "GET" &&
         req.method !== "HEAD" &&
-        !skipBodyCapture(reqHeaders)
+        isCapturableBody(reqHeaders)
       ) {
         try {
           reqBody = await req.clone().text();
@@ -128,9 +139,8 @@ function nextWrapFactory(handle: SetupHandle) {
         resHeaders[k] = v;
       });
 
-      const skipResBody = skipBodyCapture(resHeaders);
       let rawBody: string | undefined;
-      if (!skipResBody) {
+      if (isCapturableBody(resHeaders)) {
         try {
           rawBody = await res.clone().text();
         } catch {
@@ -166,6 +176,7 @@ function nextWrapFactory(handle: SetupHandle) {
         resHeaders["content-type"],
         debug.mutateJsonBody,
       );
+      const mutated = modified !== rawBody;
 
       const finalHeaders = new Headers(res.headers);
       const idHeaders = requestIdResponseHeaders(
@@ -177,8 +188,12 @@ function nextWrapFactory(handle: SetupHandle) {
       for (const [k, v] of Object.entries(idHeaders)) finalHeaders.set(k, v);
       for (const [k, v] of Object.entries(debug.headers))
         finalHeaders.set(k, v);
+      // The debug injection enlarged the body; a handler-set content-length
+      // would now be wrong and truncate the response at clients. Drop it and
+      // let the server recompute.
+      if (mutated) finalHeaders.delete("content-length");
 
-      const finalBody = modified !== rawBody ? modified : rawBody;
+      const finalBody = mutated ? modified : rawBody;
 
       engine.record({
         requestId: rawId,
@@ -202,16 +217,19 @@ function nextWrapFactory(handle: SetupHandle) {
         errorFingerprint: fingerprint,
       });
 
-      if (skipResBody) {
-        // Body was never buffered — pass the original stream through.
-        return new Response(res.body, {
+      if (mutated) {
+        // We rewrote the (JSON) body ourselves — serve the new string.
+        // `|| null` because null-body statuses (204/205/304) reject ANY
+        // body in the Response constructor, including "".
+        return new Response(modified || null, {
           status: res.status,
           headers: finalHeaders,
         });
       }
-      // `|| null` because null-body statuses (204/205/304) reject ANY body
-      // in the Response constructor, including the "" that .text() yields.
-      return new Response(finalBody || null, {
+      // Everything else serves the ORIGINAL body stream, byte-for-byte —
+      // capture only ever read a clone. Rebuilding from the decoded text
+      // here would corrupt binary and non-UTF-8 responses.
+      return new Response(res.body, {
         status: res.status,
         headers: finalHeaders,
       });

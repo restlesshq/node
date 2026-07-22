@@ -303,10 +303,12 @@ function restlessLoader(this: LoaderContext, source: string): string {
   }
 
   // 6. Edge-runtime routes: the SDK's Node build can't bundle for the edge
-  //    runtime yet (fs-backed settings/env loading). Raw source — string
-  //    literals must be visible to this check.
+  //    runtime yet (fs-backed settings/env loading). Checked against RAW
+  //    source (string values are exactly what stripping blanks out), but
+  //    line-anchored so an `export const runtime = "edge"` inside a string
+  //    literal or comment mid-line can't false-positive.
   if (
-    /export\s+(?:const|let|var)\s+runtime\s*(?::[^=\n]*)?=\s*["'](?:experimental-)?edge["']/.test(
+    /^[ \t]*export\s+(?:const|let|var)\s+runtime\s*(?::[^=\n]*)?=\s*["'](?:experimental-)?edge["']/m.test(
       source,
     )
   ) {

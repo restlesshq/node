@@ -179,8 +179,12 @@ function apply<C extends NextConfigLike>(
   if (bundler === "webpack") {
     const userWebpack = cfg.webpack;
     out.webpack = (wpConfig: any, ctx: any) => {
+      // `?? wpConfig` covers user fns that mutate the config in place and
+      // return nothing — non-idiomatic but a real pattern.
       const base =
-        typeof userWebpack === "function" ? userWebpack(wpConfig, ctx) : wpConfig;
+        (typeof userWebpack === "function"
+          ? userWebpack(wpConfig, ctx)
+          : wpConfig) ?? wpConfig;
       base.module ??= {};
       base.module.rules ??= [];
       // `enforce: 'pre'` so the loader sees the original TS/JS source —
