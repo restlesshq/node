@@ -55,7 +55,7 @@ Here's how to set it up for your framework:
 | Fastify   | `await fastify.register(restless.setup(cb))`                          |
 | Koa       | `app.use(restless.setup(cb))`                                         |
 | Hono      | `app.use(restless.setup(cb))`                                         |
-| Next.js   | `export const GET = restless.setup(cb)(async (req) => { ... })`       |
+| Next.js   | `withRestless(nextConfig)` + `restless.config.ts` — no per-route changes |
 | http      | `http.createServer(restless.setup(cb)(myHandler))`                    |
 
 Full per-framework examples are in [`install.md`](./install.md).

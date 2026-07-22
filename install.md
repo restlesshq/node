@@ -98,21 +98,49 @@ app.use(restless.setup((c) => ({
 })));
 ```
 
-### Next.js (App Router)
+### Next.js (App Router) — single config, zero route changes
+
+Two files. Route files are NOT touched.
 
 ```ts
-// app/lib/restless.ts
-import restless from '@restlessai/sdk';
-export const client = restless(process.env.RESTLESS_KEY!);
+// next.config.ts (works from .mjs / .js, and object / function / async forms)
+import { withRestless } from '@restlessai/sdk/next';
 
-// app/api/hello/route.ts
-import { client } from '../../lib/restless';
+const nextConfig = { /* your existing config */ };
+export default withRestless(nextConfig);
+```
+
+```ts
+// restless.config.ts — project root, next to next.config
+import { defineConfig, mask } from '@restlessai/sdk/next';
+
+export default defineConfig({
+  setup: async (req) => ({
+    apiKey: mask(req.headers.get('authorization')),
+    owner: { id: (await getSessionUser(req)).workspaceId },
+  }),
+});
+```
+
+**How it works:** `withRestless` injects a build-time loader (webpack AND Turbopack; the active bundler is detected automatically) that wraps every `app/**/route.ts` HTTP-method export with the capture pipeline. The on-disk files are untouched, so route types, segment config (`dynamic`, `revalidate`, ...) and static analysis all behave exactly as without the SDK. `restless.config.ts` is discovered at the project root (`restless.config.{ts,mts,cts,js,mjs,cjs}`); pass `withRestless(cfg, { configPath })` to point elsewhere.
+
+**Zero-config mode:** `withRestless(nextConfig)` alone (no `restless.config.ts`) captures with `RESTLESS_KEY` from the environment and no owner attribution. Fine for a first look; create the config file before shipping.
+
+**Support matrix:** webpack builds on Next ≥ 13.4; Turbopack builds on Next ≥ 15.3 (older Turbopack setups get a build warning and no capture). Routes with `export const runtime = 'edge'` are skipped with a build warning (current limitation). Prerendered/static routes (`dynamic = 'force-static'`) serve from cache and are not captured; SSE (`text/event-stream`) and >1 MB bodies are captured without the body.
+
+**Scoping capture:** by default every App Router route handler is wrapped. `withRestless(cfg, { include: ['app/api/v1/**'] })` restricts wrapping to an allowlist (the right tool when only a public API subtree should be captured); `exclude: ['app/api/health/**']` skips specific routes and wins over `include` on overlap. Globs are project-root-relative and match with or without a leading `src/`. A `// restless-disable` comment at the top of a route file opts out that single file.
+
+**Manual wrapping (escape hatch / legacy):** the per-route API still works, e.g. for a file the loader punts on (`export *` re-exports). Mixing manual and auto wrapping is safe — a handler is never captured twice.
+
+```ts
+// app/api/hello/route.ts — only if you must wrap by hand
+import restlessNext from '@restlessai/sdk/next';
+const client = restlessNext(process.env.RESTLESS_KEY!);
 const wrap = client.setup(async (req) => ({
   apiKey: client.mask(req.headers.get('authorization')),
   owner: { id: (await getSessionUser(req)).workspaceId, enrich: enrichOwner },
 }));
 export const GET  = wrap(async () => Response.json({ ok: true }));
-export const POST = wrap(async () => Response.json({ ok: true }));
 ```
 
 ### Bare Node http / Bun.serve
@@ -395,7 +423,10 @@ interface ClientOptions {
 - Reading `.env` / `.env.local` to "check" API keys during setup. LLMs: **never read these files**.
 - Calling `client.flush()` in a hot path. It's for shutdown/test-end only.
 - Expecting an SDK-level `modifyBody` / `headers` hook. They don't exist (§9).
-- Wrapping Next.js Pages-Router handlers with the App-Router adapter, or vice versa. `@restlessai/sdk/next` expects App-Router `Request/Response`.
+- Wrapping Next.js Pages-Router handlers with the App-Router adapter, or vice versa. `@restlessai/sdk/next` expects App-Router `Request/Response` (and `withRestless` auto-wraps App Router routes only).
+- Manually wrapping route handlers in a Next.js app that already uses `withRestless`. Harmless (the double-wrap guard captures once) but redundant — delete the per-route wraps when migrating.
+- Putting heavy imports at the top of `restless.config.ts`. The file is bundled into EVERY route's server chunk, and `next build` evaluates route modules while collecting page data — a top-level import of DB-backed code (mongoose clients that throw without env, etc.) breaks builds for routes that never touched the DB. Import auth/DB helpers dynamically inside the callback instead: `const { authenticate } = await import('@/lib/auth')`.
+- Testing an unpublished SDK build in a Next app via `npm install <dir>` / `npm link`. The symlink target usually lives outside `turbopack.root`, and Turbopack won't resolve files that escape the root ("module not found" for the SDK). Use `npm pack` and install the tarball instead.
 
 ## 15. Quick verification after installation
 

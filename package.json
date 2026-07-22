@@ -44,6 +44,10 @@
       "import": "./dist/adapters/next.js",
       "require": "./dist/adapters/next.cjs"
     },
+    "./next-loader": {
+      "types": "./dist/adapters/next-loader.d.ts",
+      "default": "./dist/adapters/next-loader.cjs"
+    },
     "./http": {
       "types": "./dist/adapters/http.d.ts",
       "import": "./dist/adapters/http.js",
@@ -60,6 +64,7 @@
     "dev": "tsup --watch",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:e2e:next": "npm run build && npm --prefix test/fixtures/next-app install && node test/fixtures/next-app/e2e.mjs && node test/fixtures/next-app/e2e.mjs --webpack",
     "typecheck": "tsc --noEmit"
   },
   "keywords": [

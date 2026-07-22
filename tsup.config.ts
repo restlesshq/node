@@ -13,6 +13,7 @@ export default defineConfig({
     "src/adapters/koa.ts",
     "src/adapters/hono.ts",
     "src/adapters/next.ts",
+    "src/adapters/next-loader.ts",
     "src/adapters/http.ts",
   ],
   format: ["esm", "cjs"],
@@ -22,6 +23,9 @@ export default defineConfig({
   target: "node18",
   splitting: false,
   treeshake: true,
+  // import.meta.url must work in the CJS build (withRestless resolves the
+  // loader artifact path from it when next.config is CommonJS).
+  shims: true,
   external: ["fastify", "fastify-plugin", "koa", "hono", "next"],
   // Inline the package.json version at build time so the wire payload's
   // creator.version always matches the published artifact. See

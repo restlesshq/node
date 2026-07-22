@@ -190,6 +190,18 @@ Return `block: true | { status?, message? }` from the setup callback to reject a
 
 For fleet-wide blocking (e.g. revoked keys across a cluster), the `Blocklist` class in `src/lib/blocklist.ts` exposes `has()` / `replace()` and is wired through the engine. The periodic-fetch piece lands when the metrics server exposes an endpoint. The intent is to avoid requiring Redis by serving a small signed snapshot and keeping it in-process.
 
+## Next.js auto-wrap (withRestless)
+
+Three cooperating pieces (`src/adapters/next-plugin.ts`, `next-loader.ts`, and `wrapRouteHandler` in `next.ts`):
+
+1. **`withRestless(nextConfig)`** runs at next.config evaluation. It discovers `restless.config.*` at the project root, detects the active bundler (`TURBOPACK` env → CLI flags → version default; Turbopack is the Next 16 default), and injects the wrapping loader into exactly one of `module.rules` (webpack, `enforce: 'pre'`) or `turbopack.rules` (glob `**/app/**/route.{exts}`, `condition: { not: 'foreign' }` on Next 16+). Only one is patched because Next warns about stray webpack config under Turbopack. Loader options must survive Turbopack's strict serialization — plain values only, no undefined-valued keys.
+
+2. **The loader** replaces each route module's source with a generated facade — the on-disk file is untouched, which is what keeps Next's route type-checking and segment-config static analysis (both read the original file) working. The facade imports the original module through a `?__restless_original__` query-suffixed self-import (same file, distinct module identity; the query doubles as the recursion guard), imports `restless.config` relative to the route file, re-exports detected segment-config exports **concretely** (Next can't handle `export * from` in route modules, and dev mode errors on unexpected `default` exports — so neither is ever emitted), and shadows each detected HTTP-method export with `__restless_wrap(orig.METHOD, config, "METHOD")`. Detection is regex over comment/string-stripped source against the closed legal export surface of a route file. Files the loader can't safely transform (`export *` re-exports) are passed through with a build warning; edge-runtime routes are skipped in v1 because the SDK's settings/env loading is fs-backed.
+
+3. **`wrapRouteHandler`** memoizes one client per config object (the config module evaluates once per server process, so all routes share one uploader queue) and delegates to the same wrap factory as the manual API. The factory marks its output with a non-enumerable `__restlessWrapped` and passes already-marked handlers through, so manual and auto wrapping compose without double capture. It also passes straight through when `NEXT_PHASE === 'phase-production-build'` — build-time prerendering of static routes must not be captured or get headers baked into cached output — and skips body buffering for `text/event-stream` and >1 MB bodies (headers still stamped, log recorded bodyless).
+
+The fixture app in `test/fixtures/next-app` exercises the whole chain against a mock ingress under both bundlers: `npm run test:e2e:next`.
+
 ## Environment variables
 
 | variable             | effect                                                            |
