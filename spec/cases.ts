@@ -342,28 +342,6 @@ export const FINGERPRINT_CASES: CaseDef[] = [
   { id: "fp/route-only-no-route", requirement: "FP-032", op: "fingerprint",
     input: { status: 503, method: "GET" } },
 
-  // --- FP-047: the key derivation, dialect-free ---
-  { id: "fallback/with-message", requirement: "FP-047", op: "fallbackKey",
-    input: { status: 500, method: "POST", route: "/pets", responseBody: { message: "Something came apart" } },
-    note: "The derivation a stack fingerprint reports as previousKey. Exposed as its own op because every case that reaches it via `fingerprint` carries a v8 stack, which non-v8 SDKs must skip (FP-046) - so without this the string would be pinned only in the reference." },
-  { id: "fallback/without-message", requirement: "FP-047", op: "fallbackKey",
-    input: { status: 503, method: "GET", route: "/health" },
-    note: "No extractable message, so it falls to the route-only shape." },
-  { id: "fallback/normalizes-route", requirement: "FP-047", op: "fallbackKey",
-    input: { status: 500, method: "GET", route: "/pets/123", responseBody: { message: "boom" } },
-    note: "The route is normalized first, so the previous key groups the same way the message strategy did." },
-  { id: "fallback/no-method-defaults-get", requirement: "FP-011", op: "fallbackKey",
-    input: { status: 500, route: "/pets" } },
-
-  // --- FP-047: the transitional previous key ---
-  { id: "fp/stack-carries-previous-key", requirement: "FP-047", op: "fingerprint",
-    input: { status: 500, method: "POST", route: "/pets", responseBody: { message: "Something came apart" },
-             stackTrace: "Error: boom\n    at findById (/proj/src/db/users.js:12:34)" },
-    note: "The stack strategy displaces the message strategy, so it reports what the key WOULD have been. Without this, turning the stack strategy on silently orphans any Agent Recovery message already attached to the old key." },
-  { id: "fp/no-previous-key-without-stack", requirement: "FP-047", op: "fingerprint",
-    input: { status: 500, method: "POST", route: "/pets", responseBody: { message: "Something came apart" } },
-    note: "Nothing was displaced, so there is no previous key to report." },
-
   // --- normalizeRoute ---
   { id: "route/numeric", requirement: "FP-030", op: "normalizeRoute", input: { route: "/users/123" } },
   { id: "route/uuid", requirement: "FP-030", op: "normalizeRoute", input: { route: "/users/550e8400-e29b-41d4-a716-446655440000" } },
