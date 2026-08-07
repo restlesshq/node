@@ -166,7 +166,7 @@ export function fingerprint(err: CapturedError): Fingerprint {
  * stack strategy can report what it displaced (FP-047) without duplicating
  * the logic it would otherwise have run.
  */
-function fallbackKey(
+export function fallbackKey(
   status: number,
   method: string,
   err: CapturedError,

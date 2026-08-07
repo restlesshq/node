@@ -342,6 +342,19 @@ export const FINGERPRINT_CASES: CaseDef[] = [
   { id: "fp/route-only-no-route", requirement: "FP-032", op: "fingerprint",
     input: { status: 503, method: "GET" } },
 
+  // --- FP-047: the key derivation, dialect-free ---
+  { id: "fallback/with-message", requirement: "FP-047", op: "fallbackKey",
+    input: { status: 500, method: "POST", route: "/pets", responseBody: { message: "Something came apart" } },
+    note: "The derivation a stack fingerprint reports as previousKey. Exposed as its own op because every case that reaches it via `fingerprint` carries a v8 stack, which non-v8 SDKs must skip (FP-046) - so without this the string would be pinned only in the reference." },
+  { id: "fallback/without-message", requirement: "FP-047", op: "fallbackKey",
+    input: { status: 503, method: "GET", route: "/health" },
+    note: "No extractable message, so it falls to the route-only shape." },
+  { id: "fallback/normalizes-route", requirement: "FP-047", op: "fallbackKey",
+    input: { status: 500, method: "GET", route: "/pets/123", responseBody: { message: "boom" } },
+    note: "The route is normalized first, so the previous key groups the same way the message strategy did." },
+  { id: "fallback/no-method-defaults-get", requirement: "FP-011", op: "fallbackKey",
+    input: { status: 500, route: "/pets" } },
+
   // --- FP-047: the transitional previous key ---
   { id: "fp/stack-carries-previous-key", requirement: "FP-047", op: "fingerprint",
     input: { status: 500, method: "POST", route: "/pets", responseBody: { message: "Something came apart" },
@@ -394,7 +407,7 @@ export const FINGERPRINT_CASES: CaseDef[] = [
   { id: "path/app", requirement: "FP-042", op: "projectRelative", input: { file: "/a/app/x.js" } },
   { id: "path/no-known-dir", requirement: "FP-042", op: "projectRelative", input: { file: "/opt/weird/place/thing.js" },
     note: "Falls back to the last two path components." },
-  { id: "path/leftmost-wins", requirement: "FP-042", op: "projectRelative", input: { file: "/a/src/b/src/c.js" },
+  { id: "path/nested-collapses-to-last", requirement: "FP-042", op: "projectRelative", input: { file: "/a/src/b/src/c.js" },
     note: "The LAST project-dir match wins. Collapsing further than a first-match rule is the accepted trade for machine independence." },
   { id: "path/bare-filename", requirement: "FP-042", op: "projectRelative", input: { file: "thing.js" } },
   { id: "path/single-segment", requirement: "FP-042", op: "projectRelative", input: { file: "/thing.js" } },

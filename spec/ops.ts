@@ -29,6 +29,7 @@ import {
   normalizeRoute,
   normalizeMessage,
   projectRelative,
+  fallbackKey,
 } from "../src/lib/fingerprint.js";
 import { toHarEntry } from "../src/lib/har.js";
 import {
@@ -81,6 +82,19 @@ export const OPS: Record<string, (input: Input) => unknown> = {
   // FP-042 is shared across every SDK even though frame PARSING is not
   // (FP-044/FP-046), so path normalization gets its own dialect-free op.
   projectRelative: (i) => projectRelative(i.file),
+  // FP-047's key derivation, exposed dialect-free for the same reason
+  // projectRelative is: every vector that reaches it through `fingerprint`
+  // carries a v8-shaped stack, so every non-v8 SDK skips them (FP-046) and
+  // the derivation would be pinned by shared vectors ONLY in the reference.
+  // Three ports each asserting their own expectation and all passing is
+  // exactly the drift this kit exists to prevent.
+  fallbackKey: (i) =>
+    fallbackKey(i.status, j(i.method) ?? "GET", {
+      status: i.status,
+      method: j(i.method) ?? undefined,
+      route: j(i.route) ?? undefined,
+      responseBody: i.responseBody,
+    }),
 
   // --- request ids ---
   formatRequestId: (i) => formatRequestId(i.rawId, j(i.prefix) ?? undefined),
