@@ -38,6 +38,25 @@ export type Fingerprint = {
   strategy: Strategy;
   key: string;
   reason: string;
+  /**
+   * TRANSITIONAL. The key the ladder would have produced if the `stack`
+   * strategy had not fired.
+   *
+   * Until the adapters started capturing exceptions, `stackTrace` was never
+   * populated, so the `stack` strategy never ran and every uncaught 5xx fell
+   * through to `message` (or `route-only`). Turning it on is a strict
+   * improvement - prose keys split when an error message is reworded and
+   * collide when two unrelated bugs read alike - but it MOVES the key, and a
+   * moved key silently orphans the Agent Recovery message attached to it.
+   *
+   * So the SDK ships both. Both are uploaded, so the server can answer for
+   * either, and `lookupRecovery` falls back to this one, which keeps an
+   * existing recovery message working while the group migrates.
+   *
+   * Remove once no project has a recovery message attached to a 5xx
+   * `message`-strategy group. See spec/CONTRACT.md FP-047.
+   */
+  previousKey?: string;
 };
 
 const CODE_FIELDS = ["code", "error_code", "errorCode", "type"] as const;
@@ -116,6 +135,9 @@ export function fingerprint(err: CapturedError): Fingerprint {
         strategy: "stack",
         key: `${status}:${frame.file}:${frame.fn}`,
         reason: `top user frame: ${frame.fn} in ${frame.file}`,
+        // FP-047. What this error keyed on before the stack strategy became
+        // reachable, so an already-attached recovery message survives.
+        previousKey: fallbackKey(status, method, err),
       };
     }
   }
@@ -137,6 +159,23 @@ export function fingerprint(err: CapturedError): Fingerprint {
     key: `${status}:${method}:${route}`,
     reason: "no usable code or message; falling back to status + route",
   };
+}
+
+/**
+ * The key the last two rungs of the ladder produce. Factored out so the
+ * stack strategy can report what it displaced (FP-047) without duplicating
+ * the logic it would otherwise have run.
+ */
+function fallbackKey(
+  status: number,
+  method: string,
+  err: CapturedError,
+): string {
+  const route = normalizeRoute(err.route);
+  const msg = normalizeMessage(extractMessage(err.responseBody));
+  return msg
+    ? `${status}:${method}:${route}:${msg}`
+    : `${status}:${method}:${route}`;
 }
 
 function readHeaderCode(headers?: Record<string, string>): string | null {
@@ -207,13 +246,49 @@ function topUserFrame(
   return null;
 }
 
-// Strip absolute path prefix down to a project-relative path. The exact prefix
-// varies per machine; we want the same fingerprint on dev and prod.
+const PROJECT_DIRS = new Set([
+  "src",
+  "lib",
+  "app",
+  "api",
+  "routes",
+  "controllers",
+  "handlers",
+]);
+
+/**
+ * Strip the machine-specific path prefix down to a project-relative path, so
+ * the same source file fingerprints identically on a laptop and in
+ * production.
+ *
+ * Takes the LAST project directory in the path, not the first. The
+ * difference is the whole point:
+ *
+ *   /Users/dev/proj/src/db/users.js   -> src/db/users.js
+ *   /app/src/db/users.js              -> src/db/users.js
+ *   /opt/render/project/src/db/users.js -> src/db/users.js
+ *
+ * A first-match rule returns `app/src/db/users.js` for the middle one,
+ * because the deployment root IS the first match. Docker's conventional
+ * `WORKDIR /app` and Heroku both root there, so first-match made production
+ * disagree with development for a large share of deployments, defeating the
+ * only thing this function exists to do.
+ *
+ * The trade-off is that a nested layout (`/proj/src/a/src/x.js`) collapses
+ * to `src/x.js` rather than `src/a/src/x.js`. That is much rarer than an
+ * /app root, and still machine-independent, which is the property that
+ * matters.
+ *
+ * See spec/CONTRACT.md FP-042.
+ */
 export function projectRelative(file: string): string {
-  const m = file.match(
-    /\/(?:src|lib|app|api|routes|controllers|handlers)\/.+$/,
-  );
-  return m ? m[0].slice(1) : file.split("/").slice(-2).join("/");
+  const segments = file.split("/");
+  // Stop before the final component: a project dir has to have something
+  // after it to be a directory at all.
+  for (let i = segments.length - 2; i >= 0; i--) {
+    if (PROJECT_DIRS.has(segments[i]!)) return segments.slice(i).join("/");
+  }
+  return segments.slice(-2).join("/");
 }
 
 // A single path segment that should collapse to `:id`. Each pattern is

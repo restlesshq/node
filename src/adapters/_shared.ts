@@ -204,7 +204,9 @@ export function lookupErrorRecovery(
   if (captured.response.status < 400) return {};
   const fingerprint = engine.computeFingerprint(captured as CapturedRequest);
   if (!fingerprint) return {};
-  const recovery = engine.lookupRecovery(fingerprint.key);
+  // Honours the transitional previous key (FP-047), so an existing
+  // recovery message keeps being injected across the strategy change.
+  const recovery = engine.lookupRecoveryFor(fingerprint);
   return { fingerprint, recovery };
 }
 

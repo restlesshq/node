@@ -304,7 +304,7 @@ export const FINGERPRINT_CASES: CaseDef[] = [
     input: { status: 500, method: "GET", route: "/users", stackTrace: "Error: boom\n    at findById (/Users/dev/proj/src/db/users.js:12:34)\n    at handler (/Users/dev/proj/src/routes/users.js:5:1)" } },
   { id: "fp/stack-path-machine-independent", requirement: "FP-042", op: "fingerprint",
     input: { status: 500, method: "GET", route: "/users", stackTrace: "Error: boom\n    at findById (/srv/app/src/db/users.js:99:1)" },
-    note: "KNOWN DEFECT, pinned deliberately. This SHOULD produce the same key as fp/stack-basic - that is the whole point of FP-042 - but it does not, because the leftmost project-dir match means a deploy root named /app is itself the match. See FP-042's Known defect note; fixing it moves stored fingerprints and needs coordination." },
+    note: "Same key as fp/stack-basic, which is the whole point of FP-042: a different absolute prefix must not change the fingerprint. Was broken until FP-042 switched from first-match to last-match." },
   { id: "fp/stack-skips-vendor", requirement: "FP-043", op: "fingerprint",
     input: { status: 500, stackTrace: "Error: boom\n    at wrap (/proj/node_modules/express/lib/router.js:1:1)\n    at emit (node:internal/events:100:1)\n    at real (/proj/src/db/users.js:12:34)" } },
   { id: "fp/stack-anonymous-frame", requirement: "FP-045", op: "fingerprint",
@@ -342,6 +342,15 @@ export const FINGERPRINT_CASES: CaseDef[] = [
   { id: "fp/route-only-no-route", requirement: "FP-032", op: "fingerprint",
     input: { status: 503, method: "GET" } },
 
+  // --- FP-047: the transitional previous key ---
+  { id: "fp/stack-carries-previous-key", requirement: "FP-047", op: "fingerprint",
+    input: { status: 500, method: "POST", route: "/pets", responseBody: { message: "Something came apart" },
+             stackTrace: "Error: boom\n    at findById (/proj/src/db/users.js:12:34)" },
+    note: "The stack strategy displaces the message strategy, so it reports what the key WOULD have been. Without this, turning the stack strategy on silently orphans any Agent Recovery message already attached to the old key." },
+  { id: "fp/no-previous-key-without-stack", requirement: "FP-047", op: "fingerprint",
+    input: { status: 500, method: "POST", route: "/pets", responseBody: { message: "Something came apart" } },
+    note: "Nothing was displaced, so there is no previous key to report." },
+
   // --- normalizeRoute ---
   { id: "route/numeric", requirement: "FP-030", op: "normalizeRoute", input: { route: "/users/123" } },
   { id: "route/uuid", requirement: "FP-030", op: "normalizeRoute", input: { route: "/users/550e8400-e29b-41d4-a716-446655440000" } },
@@ -374,9 +383,9 @@ export const FINGERPRINT_CASES: CaseDef[] = [
   // traces do not look like v8's.
   { id: "path/src", requirement: "FP-042", op: "projectRelative", input: { file: "/Users/dev/proj/src/db/users.js" } },
   { id: "path/src-other-machine", requirement: "FP-042", op: "projectRelative", input: { file: "/srv/app/src/db/users.js" },
-    note: "KNOWN DEFECT, pinned deliberately: this returns app/src/db/users.js, NOT src/db/users.js, so it does not match path/src. Docker WORKDIR /app and Heroku both root at /app, so production and laptop fingerprints diverge for the same file. See FP-042." },
+    note: "Must equal path/src. A first-match rule returns app/src/db/users.js here, because the deploy root IS the first project dir." },
   { id: "path/docker-root", requirement: "FP-042", op: "projectRelative", input: { file: "/app/src/db/users.js" },
-    note: "The single most common containerized layout, and the one the defect bites hardest." },
+    note: "Docker WORKDIR /app, the most common containerized layout there is, and the one a first-match rule breaks hardest." },
   { id: "path/lib", requirement: "FP-042", op: "projectRelative", input: { file: "/opt/x/lib/thing.py" } },
   { id: "path/routes", requirement: "FP-042", op: "projectRelative", input: { file: "/a/b/routes/users.rb" } },
   { id: "path/controllers", requirement: "FP-042", op: "projectRelative", input: { file: "/a/controllers/x.php" } },
@@ -386,7 +395,7 @@ export const FINGERPRINT_CASES: CaseDef[] = [
   { id: "path/no-known-dir", requirement: "FP-042", op: "projectRelative", input: { file: "/opt/weird/place/thing.js" },
     note: "Falls back to the last two path components." },
   { id: "path/leftmost-wins", requirement: "FP-042", op: "projectRelative", input: { file: "/a/src/b/src/c.js" },
-    note: "The FIRST project-dir match wins, not the last." },
+    note: "The LAST project-dir match wins. Collapsing further than a first-match rule is the accepted trade for machine independence." },
   { id: "path/bare-filename", requirement: "FP-042", op: "projectRelative", input: { file: "thing.js" } },
   { id: "path/single-segment", requirement: "FP-042", op: "projectRelative", input: { file: "/thing.js" } },
 

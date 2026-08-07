@@ -71,7 +71,10 @@ export const OPS: Record<string, (input: Input) => unknown> = {
       responseBody: i.responseBody,
       stackTrace: j(i.stackTrace) ?? undefined,
     });
-    return { strategy: fp.strategy, key: fp.key };
+    // FP-047's previousKey is contract surface; `reason` is not (FP-003).
+    return fp.previousKey
+      ? { strategy: fp.strategy, key: fp.key, previousKey: fp.previousKey }
+      : { strategy: fp.strategy, key: fp.key };
   },
   normalizeRoute: (i) => normalizeRoute(j(i.route) ?? undefined),
   normalizeMessage: (i) => normalizeMessage(i.message),

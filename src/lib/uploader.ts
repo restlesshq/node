@@ -185,10 +185,17 @@ export class Uploader {
     {
       const seen = new Set<string>();
       for (const c of batch) {
-        const k = c.errorFingerprint?.key;
-        if (k && !seen.has(k)) {
-          seen.add(k);
-          batchFingerprints.push(k);
+        // Both keys, so the server can answer for either. FP-047: a project
+        // whose recovery message is still attached to the pre-stack-strategy
+        // key keeps getting it until the group migrates.
+        for (const k of [
+          c.errorFingerprint?.key,
+          c.errorFingerprint?.previousKey,
+        ]) {
+          if (k && !seen.has(k)) {
+            seen.add(k);
+            batchFingerprints.push(k);
+          }
         }
       }
     }

@@ -214,3 +214,73 @@ describe("CaptureEngine: recovery flow", () => {
     expect(true).toBe(true);
   });
 });
+
+describe("FP-047 transitional previous key", () => {
+  it("injects a message still attached to the pre-stack-strategy key", async () => {
+    // The migration this exists for. Before adapters captured exceptions the
+    // stack strategy never ran, so an uncaught 5xx keyed on its message and
+    // customers attached recovery guidance to THAT key. Turning the strategy
+    // on moves the key; without the fallback the guidance silently stops
+    // being injected, with nothing anywhere to signal it.
+    const legacyKey = "500:GET:/users:something-came-apart";
+    let sent: any;
+    const fetchImpl = vi.fn().mockImplementation(async (_u, init: any) => {
+      sent = JSON.parse(init.body);
+      return {
+        ok: true,
+        // The server only knows the OLD key, because that is what it stored.
+        json: async () => ({ recoveryMessages: { [legacyKey]: "Check the widget." } }),
+      };
+    });
+    const engine = new CaptureEngine({
+      apiKey: "k",
+      baseUrl: "http://localhost:1",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    const captured = {
+      requestId: "id-1",
+      startedAt: new Date().toISOString(),
+      routePattern: "/users",
+      request: { method: "GET", url: "http://x/users", headers: {} },
+      response: {
+        status: 500,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ message: "Something came apart" }),
+      },
+      duration: 1,
+      stackTrace: "Error: boom\n    at findById (/proj/src/db/users.js:12:34)",
+    } as any;
+
+    const fp = engine.computeFingerprint(captured)!;
+    expect(fp.strategy).toBe("stack");
+    expect(fp.previousKey).toBe(legacyKey);
+
+    engine.record({ ...captured, errorFingerprint: fp });
+    await new Promise((r) => setTimeout(r, 0));
+
+    // Both keys go up, so the server can answer for whichever it holds.
+    const uploaded = sent[0].errorFingerprint;
+    expect(uploaded.key).toBe(fp.key);
+    expect(uploaded.previousKey).toBe(legacyKey);
+
+    // Nothing is cached under the NEW key, so a plain lookup finds nothing...
+    expect(engine.lookupRecovery(fp.key)).toBeUndefined();
+    // ...but the fingerprint-aware lookup falls back and finds it.
+    expect(engine.lookupRecoveryFor(fp)).toBe("Check the widget.");
+  });
+
+  it("prefers a message on the current key over the previous one", async () => {
+    const engine = new CaptureEngine({ apiKey: "k", baseUrl: "http://localhost:1" });
+    const fp = {
+      strategy: "stack" as const,
+      key: "500:src/db/users.js:findById",
+      reason: "",
+      previousKey: "500:GET:/users:old",
+    };
+    engine.recoveryCache.set(fp.previousKey, "stale guidance");
+    engine.recoveryCache.set(fp.key, "current guidance");
+    // Once the group has migrated, the new message wins.
+    expect(engine.lookupRecoveryFor(fp)).toBe("current guidance");
+  });
+});

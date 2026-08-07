@@ -187,7 +187,7 @@ Stability rules:
 
 - **Portable by construction.** The algorithms avoid lookahead (RE2, and therefore any Go port, has none) and spell out `\w` / `\s` / `\d` as explicit character classes, because those shorthands mean different things in different regex engines: `\w` is ASCII in JS, Go and Ruby but Unicode-aware in Python; `\s` is the reverse. `normalizeRoute` is a split-on-`/` whole-segment test rather than a scan with `(?=\/|$)` for the same reason. Both rewrites were verified equivalent to the originals over 500k differential inputs, so no stored fingerprint moved. See spec/CONTRACT.md FP-030 and FP-040.
 - **No line numbers in stack keys.** The frame is `file:fn`, never `file:line`. Adding a comment above a throw shouldn't ungroup events.
-- **Project-relative file paths.** Anything before `/src/`, `/lib/`, `/app/`, `/api/`, `/routes/`, `/controllers/`, or `/handlers/` is stripped, so `/Users/dev/proj/src/db/users.js` and `/srv/app/src/db/users.js` produce the same key.
+- **Project-relative file paths.** Everything before the LAST `/src/`, `/lib/`, `/app/`, `/api/`, `/routes/`, `/controllers/` or `/handlers/` segment is stripped, so `/Users/dev/proj/src/db/users.js`, `/app/src/db/users.js` (Docker, Heroku) and `/opt/render/project/src/db/users.js` all produce `src/db/users.js`. Last rather than first, because a deploy root named `/app` is itself the first match and would survive into the key, making production disagree with a laptop.
 - **Templated routes.** Concrete IDs in the path are replaced before the key is built: numeric segments → `/:id`, RFC 4122 UUIDs → `/:id`, 16+ char hex segments → `/:id`. If the customer already passed a templated route, this is a no-op.
 - **Aggressive message normalization.** The fallback message strategy lowercases, strips URLs / emails / quoted strings, then strips *whole words* containing any digit (so `user_abc123`, `sk_live_4242`, UUID fragments all vanish), then drops residual punctuation and takes the first 6 remaining words joined by `-`. Stripping just digits isn't enough: `abc123` would become `abc` and still influence the key.
 
@@ -215,6 +215,23 @@ The per-request state hangs off `req` under `Symbol.for("@restlessai/sdk.capture
 A crash with a 4xx status (`http-errors`-style `err.status`) does not use the stack strategy: the ladder reserves it for `status >= 500`. Non-`Error` throws (strings, plain objects) carry no stack and fall through to the message / route-only strategies.
 
 ## Agent Recovery messages
+
+### The transitional `previousKey`
+
+Turning the `stack` strategy on moves the fingerprint for every uncaught
+5xx: those errors used to fall through to the `message` strategy, because no
+adapter populated `stackTrace` and the strategy never ran. A moved key
+orphans whatever Agent Recovery guidance was attached to it, silently.
+
+So a `stack` fingerprint also carries `previousKey`, the key the ladder
+would have produced without it. Both keys are uploaded, so the server can
+answer for either, and `engine.lookupRecoveryFor()` prefers the current key
+and falls back to the previous one. A customer's existing guidance keeps
+being injected while the group migrates.
+
+This is temporary. Drop it once no project has a recovery message on a 5xx
+`message`-strategy group. See spec/CONTRACT.md FP-047.
+
 
 A customer can attach a "next steps" message to a fingerprint group via the dashboard's Agent Recovery page (the `/errors` view). When the SDK sees an error whose fingerprint has a saved message, it injects the message into the response body's `debug.recovery` field so the calling agent has actionable guidance without an extra round-trip.
 

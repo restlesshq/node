@@ -675,44 +675,31 @@ stored fingerprints stable, and is verified by differential test.
 **FP-041** (MUST) The key MUST NOT contain a line or column number. Adding
 a comment above a `throw` must not split an error group.
 
-**FP-042** (MUST) `file` is made project-relative. If the path contains a
-`/src/`, `/lib/`, `/app/`, `/api/`, `/routes/`, `/controllers/` or
-`/handlers/` segment, the path from the **first** such segment onward is
-used (without the leading `/`). Otherwise the last two path components are
-used.
+**FP-042** (MUST) `file` is made project-relative: of the `/src/`, `/lib/`,
+`/app/`, `/api/`, `/routes/`, `/controllers/` and `/handlers/` segments in
+the path, the **LAST** one is taken, and the path from there onward is used.
+A path with none of them uses its last two components.
 
-The intent is that the same source file produces the same key on a
-developer's laptop and in production.
+The point is that the same source file produces the same key on a
+developer's laptop and in production:
 
-> **Known defect - the intent above is not currently met.**
->
-> Because the FIRST matching segment wins, a deployment root that is itself
-> named after one of the markers becomes the match and survives into the
-> key:
->
-> | environment | path | result |
-> |---|---|---|
-> | laptop | `/Users/dev/proj/src/db/users.js` | `src/db/users.js` |
-> | Docker `WORKDIR /app` | `/app/src/db/users.js` | `app/src/db/users.js` |
-> | Heroku | `/app/src/db/users.js` | `app/src/db/users.js` |
-> | Render | `/opt/render/project/src/db/users.js` | `src/db/users.js` |
->
-> `/app` is the most common containerized layout there is, so for a large
-> share of deployments the production fingerprint does not match the one
-> generated in development, and an Agent Recovery message attached to one
-> group does not apply to the other.
->
-> The fix is to match the **last** project-dir segment rather than the
-> first. That resolves every row above to `src/db/users.js`. Its own
-> trade-off is that a nested layout (`/proj/src/a/src/x.js`) would collapse
-> further than it does today, which is far rarer than a `/app` root.
->
-> This is deliberately NOT fixed in 1.0.0: it changes stored
-> fingerprint keys, so it is a CHANGE-003 coordinated change requiring the
-> ingest, the dashboard and every SDK to move together, plus a decision
-> about existing Agent Recovery messages. Vectors `path/src-other-machine`
-> and `path/docker-root` pin the current behaviour so that ports agree with
-> the reference in the meantime.
+| environment | path | result |
+|---|---|---|
+| laptop | `/Users/dev/proj/src/db/users.js` | `src/db/users.js` |
+| Docker `WORKDIR /app` | `/app/src/db/users.js` | `src/db/users.js` |
+| Heroku | `/app/src/db/users.js` | `src/db/users.js` |
+| Render | `/opt/render/project/src/db/users.js` | `src/db/users.js` |
+
+**Last**, not first, and the distinction is not cosmetic. A first-match rule
+resolves the Docker and Heroku rows to `app/src/db/users.js`, because the
+deployment root IS the first match, so production and development disagree
+for the same file across the most common containerized layout there is.
+That defeats the only thing this requirement exists to do.
+
+The trade-off is that a nested layout (`/proj/src/a/src/x.js`) collapses to
+`src/x.js` rather than `src/a/src/x.js`. That is far rarer than an `/app`
+root, and the result is still machine-independent, which is the property
+being protected.
 
 **FP-043** (MUST) The chosen frame is the one **nearest the throw site**
 that is not vendor, runtime, or Restless SDK code. That is what tells two
@@ -752,6 +739,30 @@ skipped. Each SDK MUST cover its own dialect in its own test suite.
 FP-042 is NOT exempted by this. Path normalization is fully shared, so it
 is verified everywhere through the `projectRelative` operation, which takes
 an already-extracted path and is therefore dialect-free.
+
+**FP-047** (SHOULD, transitional) When the `stack` strategy fires, the
+fingerprint SHOULD also carry `previousKey`: the key the ladder would have
+produced without it.
+
+Both keys SHOULD be uploaded, so the ingest can answer a recovery lookup for
+either, and a recovery lookup SHOULD prefer the current key and fall back to
+`previousKey`.
+
+This exists because turning the `stack` strategy on MOVES the key for every
+uncaught 5xx. Before adapters captured exceptions, `stackTrace` was never
+populated, so the strategy never ran and those errors fell through to
+`message` or `route-only`. The change is a strict improvement (prose keys
+split when a message is reworded and collide when two unrelated bugs read
+alike), but a moved key silently orphans the Agent Recovery message attached
+to it, which is exactly the failure CHANGE-004 warns about.
+
+Carrying both keys makes the transition invisible to a customer: guidance
+they already wrote keeps being injected while the group migrates.
+
+Remove once no project has a recovery message attached to a 5xx
+`message`-strategy group. An implementation that has never shipped a
+`message`-strategy key for an uncaught 5xx (any SDK newer than this
+requirement) MAY omit it.
 
 Vectors: `spec/vectors/fingerprint.json`.
 
