@@ -1,3 +1,4 @@
+import type { IncomingMessage, ServerResponse } from "node:http";
 import type { RestlessClient, SetupCallback } from "../index.js";
 import type { SetupResult, CapturedRequest } from "../types.js";
 import type { CaptureEngine } from "../lib/capture.js";
@@ -322,4 +323,37 @@ export function resolveBlock(
     status: setup.block.status ?? 403,
     message: setup.block.message ?? "Forbidden",
   };
+}
+
+/**
+ * Express error-capturing middleware. Register AFTER your routes:
+ *
+ *     app.use(restless.setup(cb));
+ *     app.use('/api', routes);
+ *     app.use(restless.errorHandler);
+ *
+ * Express only routes an error to middleware registered after the throwing
+ * route, so the capture middleware cannot see it from where it sits. This
+ * stashes the error on the per-request state the response patch already
+ * reads, then calls next(err) unchanged.
+ *
+ * Lives here rather than in express.ts because express.ts is a bundle entry
+ * point: a named export alongside its default makes esbuild emit
+ * `module.exports = { default, errorHandler }` instead of the callable
+ * function, which breaks `require('@restlessai/sdk/express')(key)`. See the
+ * cjs-interop test.
+ */
+export function errorHandler(
+  err: unknown,
+  req: IncomingMessage,
+  _res: ServerResponse,
+  next: (err?: unknown) => void,
+): void {
+  try {
+    const state = captureStateOf(req);
+    if (state) state.error = err;
+  } catch {
+    /* never swallow or delay the customer's error */
+  }
+  next(err);
 }

@@ -22,7 +22,7 @@ import { ensureEnvLoaded } from "./lib/env.js";
 import { resolveBaseUrl, isTestRun } from "./lib/uploader.js";
 import { universalMiddleware } from "./lib/universal.js";
 import { SPEC_VERSION, CONFORMANCE_LEVEL } from "./lib/version.js";
-import { errorHandler } from "./adapters/express.js";
+import { errorHandler } from "./adapters/_shared.js";
 
 export type {
   ClientOptions,
@@ -170,7 +170,6 @@ function restless(apiKey?: string, opts: ClientOptions = {}): RestlessClient {
   return client;
 }
 
-export { errorHandler, SPEC_VERSION, CONFORMANCE_LEVEL };
 
 export default Object.assign(restless, {
   mask,

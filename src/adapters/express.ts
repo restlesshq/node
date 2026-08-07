@@ -12,6 +12,7 @@ import {
   recordThrown,
   errorStack,
   captureStateOf,
+  errorHandler,
   CAPTURE_STATE,
   type CaptureState,
   type SetupHandle,
@@ -285,20 +286,6 @@ type ExpressMiddleware = ReturnType<typeof expressMiddleware>;
  * exactly as it did without the SDK, and the log is still written by the
  * `res.end` that error handling triggers.
  */
-export function errorHandler(
-  err: unknown,
-  req: IncomingMessage,
-  _res: ServerResponse,
-  next: (err?: unknown) => void,
-): void {
-  try {
-    const state = captureStateOf(req);
-    if (state) state.error = err;
-  } catch {
-    /* never swallow or delay the customer's error */
-  }
-  next(err);
-}
 
 /**
  * One-liner factory:

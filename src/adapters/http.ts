@@ -19,7 +19,7 @@ import { captureStateOf, type SetupHandle } from "./_shared.js";
 type HttpHandler = (req: IncomingMessage, res: ServerResponse) => void | Promise<void>;
 type HttpListenerBuilder = (handler: HttpHandler) => HttpHandler;
 
-export function buildHttpBuilder(handle: SetupHandle): HttpListenerBuilder {
+function buildHttpBuilder(handle: SetupHandle): HttpListenerBuilder {
   const mw = restlessExpress.middleware(handle);
   return (handler: HttpHandler) => {
     // Bare http has no error-handling layer: a handler that throws before
