@@ -43,6 +43,16 @@ async function run(
   }
 }
 
+/** Collects what the SDK uploads so tests can assert on the wire payload. */
+function bodyCollector() {
+  const uploads: any[] = [];
+  const fetchImpl = vi.fn(async (_url: string, init: any) => {
+    uploads.push(...JSON.parse(init.body));
+    return { ok: true, text: async () => "" } as any;
+  });
+  return { uploads, fetchImpl: fetchImpl as unknown as typeof fetch };
+}
+
 describe("express adapter (one-liner)", () => {
   beforeEach(() => _resetSettingsCache());
   it("returns a client whose setup() gives middleware directly", async () => {
@@ -194,6 +204,136 @@ describe("express adapter (one-liner)", () => {
     expect(result.status).toBe(200);
     expect(result.headers["x-log-url"]).toBeUndefined();
     expect(JSON.parse(result.body)).toEqual({ hello: "world" });
+  });
+
+  it("captures the request body when the handler reads it with req.on('data')", async () => {
+    const { uploads, fetchImpl } = bodyCollector();
+    const restless = restlessExpress("rdme_test", {
+      baseUrl: "http://localhost:3003",
+      fetch: fetchImpl,
+    });
+    const mw = restless.setup(() => ({}));
+
+    const result = await run(
+      mw,
+      (req, res) => {
+        const chunks: Buffer[] = [];
+        req.on("data", (c: Buffer) => chunks.push(c));
+        req.on("end", () => {
+          res.setHeader("content-type", "application/json");
+          // Echo it back: proves the handler received the body intact,
+          // i.e. capture did not steal or reorder the stream.
+          res.end(Buffer.concat(chunks).toString());
+        });
+      },
+      {
+        method: "POST",
+        path: "/echo",
+        headers: { "content-type": "application/json" },
+        body: '{"hello":"world"}',
+      },
+    );
+    expect(JSON.parse(result.body)).toEqual({ hello: "world" });
+
+    await restless.flush();
+    expect(uploads[0].request.log.entries[0].request.postData.text).toBe(
+      '{"hello":"world"}',
+    );
+  });
+
+  it("captures the request body when the handler reads it with for-await", async () => {
+    // Regression: capture used to patch req.on and only saw 'data'
+    // listeners. Node's async iterator uses 'readable'/read(), so a
+    // `for await (const chunk of req)` handler produced a log with no
+    // postData at all - silently.
+    const { uploads, fetchImpl } = bodyCollector();
+    const restless = restlessExpress("rdme_test", {
+      baseUrl: "http://localhost:3003",
+      fetch: fetchImpl,
+    });
+    const mw = restless.setup(() => ({}));
+
+    const result = await run(
+      mw,
+      async (req, res) => {
+        const chunks: Buffer[] = [];
+        for await (const chunk of req) chunks.push(chunk as Buffer);
+        res.setHeader("content-type", "application/json");
+        res.end(Buffer.concat(chunks).toString());
+      },
+      {
+        method: "POST",
+        path: "/echo",
+        headers: { "content-type": "application/json" },
+        body: '{"hello":"iterator"}',
+      },
+    );
+    expect(JSON.parse(result.body)).toEqual({ hello: "iterator" });
+
+    await restless.flush();
+    expect(uploads[0].request.log.entries[0].request.postData.text).toBe(
+      '{"hello":"iterator"}',
+    );
+  });
+
+  it("captures the body even when the setup callback awaits first", async () => {
+    // Chunks can land while an async setup callback (DB lookup, JWT
+    // verification) is in flight, which is why capture is installed before
+    // the first await rather than after the block check.
+    const { uploads, fetchImpl } = bodyCollector();
+    const restless = restlessExpress("rdme_test", {
+      baseUrl: "http://localhost:3003",
+      fetch: fetchImpl,
+    });
+    const mw = restless.setup(async () => {
+      await new Promise((r) => setTimeout(r, 25));
+      return {};
+    });
+
+    const result = await run(
+      mw,
+      async (req, res) => {
+        const chunks: Buffer[] = [];
+        for await (const chunk of req) chunks.push(chunk as Buffer);
+        res.setHeader("content-type", "application/json");
+        res.end(Buffer.concat(chunks).toString());
+      },
+      {
+        method: "POST",
+        path: "/echo",
+        headers: { "content-type": "application/json" },
+        body: '{"hello":"late"}',
+      },
+    );
+    expect(JSON.parse(result.body)).toEqual({ hello: "late" });
+
+    await restless.flush();
+    expect(uploads[0].request.log.entries[0].request.postData.text).toBe(
+      '{"hello":"late"}',
+    );
+  });
+
+  it("does not stall a handler that ignores the request body", async () => {
+    const restless = restlessExpress("rdme_test", {
+      baseUrl: "http://localhost:3003",
+      fetch: (async () => ({
+        ok: true,
+        text: async () => "",
+      })) as unknown as typeof fetch,
+    });
+    const mw = restless.setup(() => ({}));
+
+    const result = await run(
+      mw,
+      (_req, res) => res.end("ignored"),
+      {
+        method: "POST",
+        path: "/ignore",
+        headers: { "content-type": "application/json" },
+        body: '{"hello":"world"}',
+      },
+    );
+    expect(result.body).toBe("ignored");
   });
 
   it("exposes the one-liner surface", () => {

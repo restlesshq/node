@@ -171,6 +171,11 @@ export class CaptureEngine {
       route: captured.routePattern,
       responseHeaders: captured.response.headers,
       responseBody: parsed,
+      // Present only when an adapter caught the exception behind this
+      // response. It outranks the message strategy, so an identical
+      // crashing handler groups by throw site rather than by whatever
+      // prose the framework's error page happened to render.
+      stackTrace: captured.stackTrace,
     });
   }
 
@@ -202,6 +207,15 @@ export class CaptureEngine {
     const baseOwner: OwnerDetails & { id?: string } =
       id !== undefined ? { id } : {};
     const cacheKey = id || rest.apiKey;
+
+    // A blocked request never reaches the handler, and no adapter logs one
+    // except Fastify (whose onSend still fires). Enriching it is pure
+    // waste: without this, a banned tenant costs one database lookup per
+    // owner id, every time the cache expires, forever. Ship the id alone -
+    // it is still the dashboard's grouping key.
+    if (result.block) {
+      return { ...rest, project: baseOwner } as ResolvedSetup;
+    }
 
     // We cache the enriched VALUE (not just a freshness marker) so
     // every upload carries owner metadata, even when we skip running

@@ -7,6 +7,7 @@ import {
   applyInternalBodyMods,
   lookupErrorRecovery,
   resolveBlock,
+  recordThrown,
   type SetupHandle,
 } from "./_shared.js";
 import {
@@ -54,9 +55,42 @@ function koaMiddleware(handle: SetupHandle) {
     const startedAt = new Date().toISOString();
     const startTime = Date.now();
 
-    await next();
+    let failure: { err: unknown } | undefined;
+    try {
+      await next();
+    } catch (err) {
+      failure = { err };
+    }
 
     const duration = Date.now() - startTime;
+
+    if (failure) {
+      // Koa unwinds a downstream throw through every awaiting middleware
+      // before ctx.onerror builds the response, so this is the only point
+      // at which the SDK can see the exception at all. There is no body yet
+      // to fingerprint or inject into; what we want is the log, with the
+      // stack, so the crash groups by throw site.
+      recordThrown(engine, failure.err, {
+        requestId: rawId,
+        startedAt,
+        duration,
+        routePattern: (ctx as any)._matchedRoute,
+        request: {
+          method: ctx.method,
+          url: fullUrl,
+          headers: reqHeaders,
+          body: safeStringifyReqBody(
+            ctx.request.body,
+            reqHeaders["content-type"],
+          ),
+        },
+        user: { apiKey: setup.apiKey, project: setup.project },
+      });
+      // Untouched, so Koa's own error handling behaves exactly as it would
+      // without the SDK installed (SAFETY-001).
+      throw failure.err;
+    }
+
     const preResHeaders: Record<string, string> = {};
     for (const [k, v] of Object.entries(ctx.response.headers)) {
       if (v) preResHeaders[k] = Array.isArray(v) ? v.join(", ") : String(v);

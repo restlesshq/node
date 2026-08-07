@@ -4,6 +4,7 @@ import restlessKoa from "../adapters/koa.js";
 import restlessHono from "../adapters/hono.js";
 import restlessNext from "../adapters/next.js";
 import restlessFastify from "../adapters/fastify.js";
+import restlessHttp from "../adapters/http.js";
 
 // The adapter defaults attach their raw helpers as properties. Read them
 // lazily (not at module-eval time) because index.ts → universal.ts → adapters
@@ -14,8 +15,48 @@ const expressMiddleware = (handle: SetupHandle) =>
 const koaMiddleware = (handle: SetupHandle) => restlessKoa.middleware(handle);
 const honoMiddleware = (handle: SetupHandle) => restlessHono.middleware(handle);
 const nextWrapFactory = (handle: SetupHandle) => restlessNext.wrap(handle);
+const httpBuilderFactory = (handle: SetupHandle) => restlessHttp.builder(handle);
 const restlessFastifyPlugin = (fastify: any, handle: SetupHandle) =>
   restlessFastify.plugin(fastify, handle);
+
+/**
+ * Is this call `(req, res)` from a Node http server, as opposed to
+ * `(request)` / `(request, { params })` from a Next.js route?
+ *
+ * The two cases are indistinguishable at WRAP time - a dynamic Next route
+ * handler is `(req, { params })`, so even arity collides with `(req, res)`
+ * - which is why the dispatch happens per call instead. Here the arguments
+ * themselves are unambiguous: only a `ServerResponse` has `end` +
+ * `setHeader`, and Next's second argument is a plain `{ params }` object.
+ */
+function isNodeHttpCall(args: unknown[]): boolean {
+  const res = args[1] as
+    | { end?: unknown; setHeader?: unknown }
+    | null
+    | undefined;
+  return (
+    !!args[0] &&
+    typeof args[0] === "object" &&
+    !!res &&
+    typeof res === "object" &&
+    typeof res.end === "function" &&
+    typeof res.setHeader === "function"
+  );
+}
+
+/** Does this look like a Node `IncomingMessage` (rather than a Fetch `Request`)? */
+function isNodeRequest(x: unknown): boolean {
+  const req = x as { headers?: unknown; socket?: unknown } | null | undefined;
+  return (
+    !!req &&
+    typeof req === "object" &&
+    !!req.headers &&
+    // Fetch `Headers` is iterable-with-forEach; IncomingMessage.headers is a
+    // plain object, and it always has a socket behind it.
+    typeof (req.headers as { forEach?: unknown }).forEach !== "function" &&
+    !!req.socket
+  );
+}
 
 /**
  * Polymorphic middleware / plugin / wrapper.
@@ -46,15 +87,21 @@ export function universalMiddleware(handle: SetupHandle) {
   let koa: ReturnType<typeof koaMiddleware> | null = null;
   let hono: ReturnType<typeof honoMiddleware> | null = null;
   let nextWrap: ReturnType<typeof nextWrapFactory> | null = null;
+  let httpBuilder: ReturnType<typeof httpBuilderFactory> | null = null;
 
   const polymorphic = function polymorphic(...args: unknown[]): unknown {
     const first = args[0];
 
-    // Single-arg, function: Next.js route handler or generic HOF wrap.
-    //   export const GET = restless.setup(cb)(async (req) => ...)
+    // Single-arg, function: a handler being wrapped. TWO frameworks land
+    // here and they are not distinguishable yet:
+    //   export const GET = restless.setup(cb)(async (req) => ...)   ← Next
+    //   http.createServer(restless.setup(cb)(myHandler))            ← http
+    // so defer to the first call, where the arguments say which it is.
+    // Getting this wrong used to hand an IncomingMessage to the Next
+    // adapter: `req.headers.forEach is not a function`, thrown as an
+    // unhandled rejection, request hanging with no response.
     if (args.length === 1 && typeof first === "function") {
-      nextWrap ||= nextWrapFactory(handle);
-      return nextWrap(first as any);
+      return wrapUnknownHandler(first as (...a: any[]) => any);
     }
 
     // Fastify plugin: first arg has .addHook / .decorateRequest.
@@ -108,6 +155,48 @@ export function universalMiddleware(handle: SetupHandle) {
         "If you're using a less-common framework, import the specific adapter (e.g. '@restlessai/sdk/express') and call restless.setup(cb) through it.",
     );
   };
+
+  /**
+   * Wrap a handler whose framework isn't known yet, deciding on first call:
+   * `(req, res)` means bare Node http, anything else means a Next.js route
+   * handler (a Fetch `Request`, optionally with a `{ params }` context).
+   *
+   * `@restlessai/sdk/http` and `@restlessai/sdk/next` remain the explicit
+   * escape hatches, and are what to reach for if a handler is called some
+   * other way.
+   */
+  function wrapUnknownHandler(handler: (...a: any[]) => any) {
+    // Already captured (a manual wrap inside a route withRestless also
+    // auto-wraps): hand it back untouched, one capture per request.
+    if (restlessNext.isWrapped(handler)) return handler;
+
+    let asHttp: ReturnType<NonNullable<typeof httpBuilder>> | null = null;
+    let asNext: ((...a: any[]) => any) | null = null;
+
+    // Marked for the same reason: an outer wrap of THIS function must see
+    // that the work is already done.
+    return restlessNext.mark(function restlessHandler(
+      ...callArgs: unknown[]
+    ): unknown {
+      if (isNodeHttpCall(callArgs)) {
+        httpBuilder ||= httpBuilderFactory(handle);
+        asHttp ||= httpBuilder(handler as any);
+        return asHttp(callArgs[0] as any, callArgs[1] as any);
+      }
+      // A Node request with no response argument can't be served at all,
+      // and the Next adapter would fail deep inside on a header read. Say
+      // what's wrong here instead.
+      if (isNodeRequest(callArgs[0])) {
+        throw new Error(
+          "@restlessai/sdk: a Node http handler was called without a response object. " +
+            "Pass the listener straight to http.createServer(...), or import the explicit adapter ('@restlessai/sdk/http').",
+        );
+      }
+      nextWrap ||= nextWrapFactory(handle);
+      const wrapped = (asNext ||= nextWrap(handler as any));
+      return wrapped(...callArgs);
+    });
+  }
   (polymorphic as unknown as Record<symbol, unknown>)[skipOverride] = true;
   return polymorphic;
 }

@@ -38,6 +38,48 @@ jobs:
 
       - run: npm run typecheck
 
+      # Also asserts spec/vectors/*.json still match the reference
+      # implementation (test/spec.vectors.test.ts). A behaviour change in
+      # src/lib/ that nobody intended fails here with a per-case diff.
       - run: npm test
 
       - run: npm run build
+
+      # Drive the committed vectors through the conformance driver, the
+      # same way a Python or Go port will. Proves the harness itself works
+      # on every supported Node version, not just the author's machine.
+      - run: npm run spec:conformance
+
+  # A change to contract surface must move the contract with it. This is the
+  # guard that stops the spec silently rotting away from the code it
+  # describes. See spec/CONTRACT.md CHANGE-002.
+  spec-sync:
+    name: spec sync
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Contract surface changes require a spec change
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          changed=$(git diff --name-only "$BASE" "$HEAD")
+          surface=$(echo "$changed" | grep -E '^src/lib/(mask|redact|fingerprint|har|requestId)\.ts$' || true)
+          spec=$(echo "$changed" | grep -E '^spec/' || true)
+
+          if [ -n "$surface" ] && [ -z "$spec" ]; then
+            echo "::error::These files are cross-SDK contract surface:"
+            echo "$surface" | sed 's/^/  /'
+            echo ""
+            echo "Changing them without touching spec/ means every other Restless SDK"
+            echo "is now silently wrong. Update spec/CONTRACT.md, regenerate the"
+            echo "vectors with \`npm run spec:vectors\`, and bump the spec version."
+            echo "See spec/CONTRACT.md CHANGE-001."
+            exit 1
+          fi
+
+          echo "ok: contract surface untouched, or spec/ moved with it"

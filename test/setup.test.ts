@@ -65,6 +65,63 @@ describe("restless() factory + setup()", () => {
     expect(result).toEqual({});
   });
 
+  it("uploads to the baseUrl option, ahead of RESTLESS_BASE_URL", async () => {
+    // Precedence matches base_url= in Python and WithBaseURL(...) in Go:
+    // explicit option, then env, then the default ingest.
+    const oldEnv = process.env.RESTLESS_BASE_URL;
+    process.env.RESTLESS_BASE_URL = "http://localhost:4444";
+    try {
+      let calledUrl: string | undefined;
+      const fetchImpl = vi.fn(async (url: string) => {
+        calledUrl = url;
+        return { ok: true, text: async () => "", json: async () => ({}) } as any;
+      });
+      const client = restless("rdme_test", {
+        baseUrl: "http://localhost:5555",
+        fetch: fetchImpl as unknown as typeof fetch,
+      });
+      client.engine.record({
+        requestId: "r1",
+        startedAt: new Date().toISOString(),
+        request: { method: "GET", url: "http://x/y", headers: {} },
+        response: { status: 200, headers: {} },
+        duration: 1,
+      });
+      await client.flush();
+      expect(calledUrl).toBe("http://localhost:5555/v1/request");
+    } finally {
+      if (oldEnv === undefined) delete process.env.RESTLESS_BASE_URL;
+      else process.env.RESTLESS_BASE_URL = oldEnv;
+    }
+  });
+
+  it("falls back to RESTLESS_BASE_URL when no option is given", async () => {
+    const oldEnv = process.env.RESTLESS_BASE_URL;
+    process.env.RESTLESS_BASE_URL = "http://localhost:4444";
+    try {
+      let calledUrl: string | undefined;
+      const fetchImpl = vi.fn(async (url: string) => {
+        calledUrl = url;
+        return { ok: true, text: async () => "", json: async () => ({}) } as any;
+      });
+      const client = restless("rdme_test", {
+        fetch: fetchImpl as unknown as typeof fetch,
+      });
+      client.engine.record({
+        requestId: "r1",
+        startedAt: new Date().toISOString(),
+        request: { method: "GET", url: "http://x/y", headers: {} },
+        response: { status: 200, headers: {} },
+        duration: 1,
+      });
+      await client.flush();
+      expect(calledUrl).toBe("http://localhost:4444/v1/request");
+    } finally {
+      if (oldEnv === undefined) delete process.env.RESTLESS_BASE_URL;
+      else process.env.RESTLESS_BASE_URL = oldEnv;
+    }
+  });
+
   it("falls back to RESTLESS_KEY env var", () => {
     const oldEnv = process.env.RESTLESS_KEY;
     process.env.RESTLESS_KEY = "env-key";

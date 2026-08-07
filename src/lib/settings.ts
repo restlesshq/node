@@ -103,7 +103,7 @@ export function resolveApi(
       settings.apis.find((a) => a.id === name);
     if (!match) {
       throw new Error(
-        `@restlessai/sdk: no API named "${name}" in .api/settings.json (found: ${settings.apis
+        `@restlessai/sdk: no API named "${name}" in .restless/settings.json (found: ${settings.apis
           .map((a) => a.name)
           .join(", ")})`,
       );
@@ -127,7 +127,7 @@ export function resolveApi(
   }
 
   throw new Error(
-    `@restlessai/sdk: .api/settings.json has multiple APIs (${settings.apis
+    `@restlessai/sdk: .restless/settings.json has multiple APIs (${settings.apis
       .map((a) => a.name)
       .join(
         ", ",

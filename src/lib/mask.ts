@@ -42,7 +42,12 @@ export function mask(apiKey: string | undefined | null): string | undefined {
   // through unchanged rather than hashing the hash.
   if (apiKey.startsWith("sha512-")) return apiKey;
   if (/^<REDACTED:\d+(?::[^>]*)?>$/.test(apiKey)) return apiKey;
-  const hash = createHash("sha512").update(apiKey).digest("base64");
-  const last4 = apiKey.slice(-4);
+  // Hash the UTF-8 encoding of the key. `update(string)` defaults to utf8.
+  const hash = createHash("sha512").update(apiKey, "utf8").digest("base64");
+  // Last 4 Unicode CODE POINTS, not UTF-16 code units — a naive slice(-4)
+  // can split a surrogate pair and produce a different tail than a port
+  // whose strings are code-point indexed (Python) or byte indexed (Go).
+  // See spec/CONTRACT.md MASK-006.
+  const last4 = [...apiKey].slice(-4).join("");
   return `sha512-${hash}?${last4}`;
 }

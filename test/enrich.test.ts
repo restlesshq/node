@@ -156,6 +156,46 @@ describe("CaptureEngine: project.enrich flow", () => {
     expect(result.project).toEqual({ id: "acme-id" });
   });
 
+  it("skips enrich entirely when the setup result blocks the request", async () => {
+    // A blocked request never reaches the handler and is only ever logged
+    // by Fastify (whose onSend still fires), so enriching it is pure waste:
+    // a banned tenant would otherwise cost one database lookup per owner id
+    // for as long as it keeps hammering the API.
+    const { engine } = mkEngine();
+    const enrich = vi.fn().mockResolvedValue({ label: "Banned Co" });
+    engine.setCallback(() => ({
+      apiKey: "sha512-xxx?1234",
+      owner: { id: "banned-id", enrich },
+      block: { status: 429, message: "slow down" },
+    }));
+
+    const result = await engine.resolve({ method: "GET", url: "/", headers: {} });
+    expect(enrich).not.toHaveBeenCalled();
+    // The block config still reaches the adapter, and the owner id still
+    // ships so a blocked request groups with the rest of that owner's.
+    expect(result.block).toEqual({ status: 429, message: "slow down" });
+    expect(result.project).toEqual({ id: "banned-id" });
+    expect(result.apiKey).toBe("sha512-xxx?1234");
+  });
+
+  it("blocking does not poison the enrich cache for later allowed requests", async () => {
+    const { engine } = mkEngine();
+    const enrich = vi.fn().mockResolvedValue({ label: "Acme" });
+    let blocked = true;
+    engine.setCallback(() => ({
+      owner: { id: "acme-id", enrich },
+      ...(blocked ? { block: true } : {}),
+    }));
+
+    await engine.resolve({ method: "GET", url: "/", headers: {} });
+    expect(enrich).not.toHaveBeenCalled();
+
+    blocked = false;
+    const allowed = await engine.resolve({ method: "GET", url: "/", headers: {} });
+    expect(enrich).toHaveBeenCalledTimes(1);
+    expect(allowed.project).toEqual({ id: "acme-id", label: "Acme" });
+  });
+
   it("skips enrich when project.id is missing", async () => {
     const { engine } = mkEngine();
     const enrich = vi.fn().mockResolvedValue({ label: "X" });

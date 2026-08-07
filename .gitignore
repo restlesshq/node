@@ -8,3 +8,4 @@ CLAUDE.md
 publish.sh
 .next/
 test/fixtures/next-app/package-lock.json
+spec/driver/.build/

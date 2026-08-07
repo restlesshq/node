@@ -195,6 +195,72 @@ describe("universal middleware: runtime framework detection", () => {
     expect(res.headers.get("x-request-id")).toBeDefined();
   });
 
+  it("detects bare Node http when the wrapped handler is called with (req, res)", async () => {
+    // install.md documents `http.createServer(restless.setup(cb)(handler))`
+    // off the universal import. That used to hand the IncomingMessage to
+    // the Next adapter - `req.headers.forEach is not a function`, raised as
+    // an unhandled rejection, request hanging with no response.
+    const client = mkClient();
+    const cb = vi.fn().mockReturnValue({ apiKey: "k" });
+    const listener = (client.setup(cb) as any)(
+      (_req: http.IncomingMessage, res: http.ServerResponse) => {
+        res.setHeader("content-type", "application/json");
+        res.end('{"ok":true}');
+      },
+    );
+
+    const server = http.createServer(listener);
+    await new Promise<void>((r) => server.listen(0, r));
+    const { port } = server.address() as { port: number };
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/hi`, {
+        signal: AbortSignal.timeout(2000),
+      });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ ok: true });
+      expect(res.headers.get("x-request-id")).toMatch(/^[0-9a-f-]{36}$/);
+      expect(cb).toHaveBeenCalled();
+    } finally {
+      server.close();
+    }
+  });
+
+  it("still routes a two-argument Next.js handler to the Next adapter", async () => {
+    // A dynamic App Router route is `(req, { params })`, so arity alone
+    // cannot separate it from a Node `(req, res)` listener. The decision is
+    // made per call, off the arguments.
+    const client = mkClient();
+    const mw = client.setup(() => ({ apiKey: "k" }));
+    const wrapped = (mw as any)(async (_req: Request, ctx: any) =>
+      Response.json({ id: (await ctx.params).id }),
+    );
+
+    const res: Response = await wrapped(new Request("http://localhost/car/7"), {
+      params: Promise.resolve({ id: "7" }),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ id: "7" });
+    expect(res.headers.get("x-request-id")).toBeDefined();
+  });
+
+  it("does not double-wrap an already-captured handler", async () => {
+    // withRestless auto-wraps every route; a manual wrap in the same file
+    // must still capture exactly once.
+    const client = mkClient();
+    const mw = client.setup(() => ({ apiKey: "k" }));
+    const once = (mw as any)(async () => Response.json({ ok: true }));
+    const twice = (mw as any)(once);
+    expect(twice).toBe(once);
+  });
+
+  it("fails loudly when a Node request arrives with no response object", async () => {
+    const client = mkClient();
+    const mw = client.setup(() => ({}));
+    const wrapped = (mw as any)((_req: unknown, _res: unknown) => {});
+    const fakeReq = { headers: { host: "x" }, socket: {}, method: "GET" };
+    expect(() => wrapped(fakeReq)).toThrow(/without a response object/);
+  });
+
   it("throws a helpful error on an unrecognized call shape", () => {
     const client = mkClient();
     const mw = client.setup(() => ({}));

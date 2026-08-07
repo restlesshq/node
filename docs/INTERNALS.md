@@ -2,6 +2,8 @@
 
 Details that don't belong in the main README. Useful if you're debugging, self-hosting, or extending the SDK.
 
+> **Building a Restless SDK in another language?** Read [`spec/CONTRACT.md`](../spec/CONTRACT.md) instead of this file. This document explains how the Node SDK works; the contract states what every SDK must do, with stable requirement IDs, generated test vectors, and a harness that runs them against any implementation. See [`spec/README.md`](../spec/README.md).
+
 ## Settings resolution
 
 On construction, `restless()` walks up from the current working directory looking for `.restless/settings.json`. The file is owned by the `api/` CLI and looks like:
@@ -58,6 +60,31 @@ Each batched `POST /v1/request` payload is an array of HAR-wrapped logs. The SDK
 
 Server-facing details (the exact wire JSON, auxiliary grouping blocks the server indexes on) live in `src/lib/uploader.ts`. If you need to change them, coordinate with the metrics server's ingest path.
 
+### Upload headers
+
+| header | value |
+|---|---|
+| `Content-Type` | `application/json` |
+| `Authorization` | `Bearer <project API key>` |
+| `X-Restless-Spec-Version` | the contract version this SDK implements, from `src/lib/version.ts` |
+
+The spec-version header exists so the ingest can attribute an off-contract payload to a specific SDK and spec version instead of guessing (spec/CONTRACT.md META-002); the ingest currently ignores it. The value is a hardcoded constant in `src/lib/version.ts`, re-exported as `SPEC_VERSION` - bump it in the same change that bumps the version at the top of `CONTRACT.md`. It is NOT `__SDK_VERSION__`, which is the npm package version baked in at build time and shipped as the HAR `creator`.
+
+## Request body capture (Express / http)
+
+Frameworks that hand the adapter an already-parsed body (Fastify `req.body`, Koa `ctx.request.body`) are easy. Express and bare http are not: the body is a stream, and the handler owns it.
+
+The Express middleware patches `req.push` - the single funnel every chunk passes through on its way into the readable buffer - and copies each chunk as it goes by. It does NOT subscribe to `'data'`: attaching a listener switches the stream into flowing mode and steals the body from a handler that meant to read it itself.
+
+This used to patch `req.on` and wrap only `'data'` listeners, which silently captured nothing from a handler that read the body any other way. Node's async iterator (`for await (const chunk of req)`) uses `'readable'`/`read()`, so those requests logged with no `postData` at all and no indication anything was missing.
+
+Two ordering details:
+
+- The patch is installed **before** the first `await` in the middleware. An async setup callback (DB lookup, JWT verification) is enough of a window for chunks to arrive, and anything pushed before the patch is invisible.
+- A blocked request restores the original `push` and drops what it buffered - nothing downstream will read that body.
+
+If `req.push` isn't a function (an exotic runtime shim), body capture is skipped rather than forced; the log still ships, bodyless.
+
 ## Redaction
 
 Runs at `CaptureEngine.record()`: the single choke point before anything enters the uploader queue. No adapter bypasses this path.
@@ -70,6 +97,8 @@ Runs at `CaptureEngine.record()`: the single choke point before anything enters 
 ```
 
 This format is a contract with the dashboard. The frontend pattern-matches on `<REDACTED:(\d+)(?::(.{4}))?>` to render the length and tail as UI chrome. **Do not change the format without coordinating with the dashboard team.** Adding new prefixes (e.g. `<REDACTED:N:tail:reason>`) is fine if it's backward-compatible with the current regex.
+
+Length and tail are counted in **Unicode code points**, not UTF-16 code units. `"🙂🙂🙂🙂🙂🙂🙂🙂"` redacts to `<REDACTED:8:🙂🙂🙂🙂>`, not `<REDACTED:16:🙂🙂>`. JS `.length` would say 16, Python would say 8, Go's `len()` would say 32 - so a code-unit count makes the same secret produce a different sentinel in every SDK, and a naive `slice(-4)` can split a surrogate pair and emit an ill-formed tail. Same rule applies to `mask()`'s `?last4`. See spec/CONTRACT.md REDACT-002 and MASK-006.
 
 ### What gets redacted
 
@@ -84,9 +113,19 @@ Extensions come from two sources, both additive on top of the defaults:
 
 Both extensions merge with the built-in defaults. Defaults are always applied.
 
+### Bodies with nothing to redact are passed through untouched
+
+`redactBody` parses the body to look for denylisted keys. If it finds none, it returns **the caller's original string, byte for byte** rather than a re-serialized copy.
+
+This matters more than it looks. A `JSON.parse` / `JSON.stringify` round trip is lossy: JS silently truncates integers above 2^53 (an int64 id like `9007199254740993` comes back as `...992`) and renders `1.0` as `1`. We were corrupting customer payloads on the way to the dashboard for no benefit. It's also the main place SDKs disagree with each other - key ordering, separator style, and number rendering all differ by language - so skipping it for the overwhelming majority of bodies removes the divergence instead of trying to specify it away.
+
+Bodies that *do* contain a secret still get re-serialized; there's no way to rewrite a value without doing so. For those, the output is compact-separated with key order preserved. See spec/CONTRACT.md REDACT-020.
+
 ### What gets truncated
 
-Request and response bodies are capped at **256 KB** (`MAX_BODY_BYTES` in `src/lib/capture.ts`). Larger bodies are truncated with a `[...TRUNCATED: original N bytes]` suffix. UTF-8 boundaries are not guaranteed; the slice is on code units.
+Request and response bodies are capped at **256 KB** (`MAX_BODY_BYTES` in `src/lib/capture.ts`). Larger bodies are truncated with a `[...TRUNCATED: original N bytes]` suffix, where N is the original UTF-8 byte length.
+
+The cut is made at the byte limit and then backed off to the nearest character boundary, so the kept prefix is always a complete sequence of Unicode scalar values. Truncating `"🚀🚀🚀🚀"` at 6 bytes yields one rocket, not one-and-a-half. (This used to compare byte length but slice UTF-16 code units, which cut at a different point in every language and could emit a lone surrogate.) See spec/CONTRACT.md REDACT-031.
 
 ### Queue cap
 
@@ -102,6 +141,7 @@ The setup callback's `enrich` function lets users do expensive lookups (DB, JWT 
 - Entries are marked fresh after `enrich()` resolves successfully.
 - A 1-hour TTL backstops the cache (`DEFAULT_TTL_MS` in `src/lib/enrichCache.ts`).
 - `enrich` failures are swallowed and NOT cached. The next request will retry.
+- A setup result carrying `block` skips `enrich` outright, cache read included. A blocked request never reaches the handler and is logged only by Fastify (whose `onSend` still fires), so the lookup would be pure waste - and the waste is unbounded: an abusive tenant would otherwise buy one lookup per owner id every time the cache expired. The blocked log keeps `owner.id`, which is the dashboard's grouping key; it loses the enriched label / emails.
 
 ### Server-driven invalidation
 
@@ -119,7 +159,7 @@ When a user is cached-fresh, the upload payload contains just the masked `apiKey
 
 ## Masking
 
-`mask()` produces `sha512-<base64-digest>?<last4>`. This format is the SDK's wire contract with the metrics server's lookup code. Changing the format requires a coordinated server update; don't do it in isolation.
+`mask()` produces `sha512-<base64-digest>?<last4>`. This format is the SDK's wire contract with the metrics server's lookup code. Changing the format requires a coordinated server update; don't do it in isolation. The digest is over the key's UTF-8 bytes, standard base64 (not base64url, padding included), and `last4` is the last four **code points** of the plaintext.
 
 Falsy input returns `undefined` rather than hashing a placeholder. When neither `apiKey` nor `owner.id` is provided, the log is tagged as anonymous.
 
@@ -137,7 +177,7 @@ Strategies are tried in priority order; the first that yields a key wins. 404 is
 | 0b | `endpoint`     | `status == 404` with no path parameter (paramless route or no match)| `404:endpoint` (constant)            |
 | 1 | `header`        | response has `x-restless-error-code` header (case-insensitive)      | `{status}:{code}`                    |
 | 2 | `body-code`     | response body has `code`, `error_code`, `errorCode`, `type`, or nested `error.code`/`error.type`/`error.error_code` that looks like an identifier (`/^[A-Za-z][\w.\-]*$/`, ≤64 chars) | `{status}:{code}`                    |
-| 3 | `stack`         | `status >= 500` and a stack trace is available; uses the topmost frame that isn't `node_modules`, `node:internal`, or `@restlessai/sdk` | `{status}:{file}:{fn}`               |
+| 3 | `stack`         | `status >= 500` and the adapter caught the exception behind the response; uses the topmost frame that isn't `node_modules`, `node:internal`, or `@restlessai/sdk` | `{status}:{file}:{fn}`               |
 | 4 | `message`       | response body has an extractable `message` (top-level, `error.message`, or string `error`) | `{status}:{method}:{route}:{normalized message}` |
 | 5 | `route-only`    | nothing usable                                                       | `{status}:{method}:{route}`          |
 
@@ -145,12 +185,34 @@ Strategies are tried in priority order; the first that yields a key wins. 404 is
 
 Stability rules:
 
+- **Portable by construction.** The algorithms avoid lookahead (RE2, and therefore any Go port, has none) and spell out `\w` / `\s` / `\d` as explicit character classes, because those shorthands mean different things in different regex engines: `\w` is ASCII in JS, Go and Ruby but Unicode-aware in Python; `\s` is the reverse. `normalizeRoute` is a split-on-`/` whole-segment test rather than a scan with `(?=\/|$)` for the same reason. Both rewrites were verified equivalent to the originals over 500k differential inputs, so no stored fingerprint moved. See spec/CONTRACT.md FP-030 and FP-040.
 - **No line numbers in stack keys.** The frame is `file:fn`, never `file:line`. Adding a comment above a throw shouldn't ungroup events.
 - **Project-relative file paths.** Anything before `/src/`, `/lib/`, `/app/`, `/api/`, `/routes/`, `/controllers/`, or `/handlers/` is stripped, so `/Users/dev/proj/src/db/users.js` and `/srv/app/src/db/users.js` produce the same key.
 - **Templated routes.** Concrete IDs in the path are replaced before the key is built: numeric segments → `/:id`, RFC 4122 UUIDs → `/:id`, 16+ char hex segments → `/:id`. If the customer already passed a templated route, this is a no-op.
 - **Aggressive message normalization.** The fallback message strategy lowercases, strips URLs / emails / quoted strings, then strips *whole words* containing any digit (so `user_abc123`, `sk_live_4242`, UUID fragments all vanish), then drops residual punctuation and takes the first 6 remaining words joined by `-`. Stripping just digits isn't enough: `abc123` would become `abc` and still influence the key.
 
 The site never re-derives the fingerprint. It reads what the SDK shipped. This avoids the algorithm drifting between two implementations.
+
+### Where the stack comes from
+
+The `stack` strategy only fires if something hands `fingerprint()` a stack, so every adapter catches the exception its framework lets it see and attaches it to `CapturedRequest.stackTrace`. That field is local-only: it feeds the fingerprint and is never uploaded - only the resolved `file:fn` frame inside the key leaves the process.
+
+| adapter | how it sees the exception |
+|---|---|
+| Koa, Hono | `try/catch` around `await next()`, then re-throw. Hono additionally reads `c.error`, because Hono's `compose` catches downstream throws itself, routes them to `app.onError` and resolves `next()` normally. |
+| Fastify | the `onError` hook stashes it on `req._restless`; `onSend` (which still runs for the error response) picks it up. |
+| Next.js | `try/catch` around the wrapped handler, then re-throw. Next's control-flow throws (`redirect()`, `notFound()`, `forbidden()` - anything carrying a `digest` that starts with `NEXT_`) are re-thrown WITHOUT being recorded: they are normal outcomes, and logging them would invent 500s that never happened. The `digest` prefix is the only available signal, since importing `next` at runtime would pull in an optional peer dep. |
+| Express | the exported `errorHandler` middleware, which the USER registers after their routes. Express matches error middleware by 4-arity signature and position, so the capture middleware has already returned by the time an error is routed - there is nothing to hook from inside it. `errorHandler` only stashes onto the per-request state and calls `next(err)`; the log is still written by the `res.end` that Express's error handling triggers. |
+| http | `try/catch` around the handler. There is no error-handling layer to end the response, so this path records the log itself and then re-throws (leaving the same unhandled rejection as before). |
+
+Two invariants across all of them:
+
+- **The exception is re-thrown unchanged** (spec/CONTRACT.md SAFETY-001). Framework error handling must behave exactly as it would without the SDK installed.
+- **Exactly one log per request.** Per-request state carries a `recorded` flag, so a handler that throws after partially responding, or one that calls `res.end` twice, still produces one log.
+
+The per-request state hangs off `req` under `Symbol.for("@restlessai/sdk.captureState")`. `Symbol.for` rather than a module-private symbol because the package ships both ESM and CJS builds and a process can load both - a unique symbol would make the error middleware from one build invisible to the middleware from the other.
+
+A crash with a 4xx status (`http-errors`-style `err.status`) does not use the stack strategy: the ladder reserves it for `status >= 500`. Non-`Error` throws (strings, plain objects) carry no stack and fall through to the message / route-only strategies.
 
 ## Agent Recovery messages
 
@@ -186,7 +248,7 @@ The host the SDK uses for `x-log-url` is learned from the metrics server: every 
 
 ## Blocking
 
-Return `block: true | { status?, message? }` from the setup callback to reject a request with a 4xx response. The handler never runs.
+Return `block: true | { status?, message? }` from the setup callback to reject a request with a 4xx response. The handler never runs, and `owner.enrich` is not called (see Enrichment above).
 
 For fleet-wide blocking (e.g. revoked keys across a cluster), the `Blocklist` class in `src/lib/blocklist.ts` exposes `has()` / `replace()` and is wired through the engine. The periodic-fetch piece lands when the metrics server exposes an endpoint. The intent is to avoid requiring Redis by serving a small signed snapshot and keeping it in-process.
 
@@ -224,5 +286,6 @@ If `RESTLESS_KEY` (and `README_API_KEY`) are both unset when `restless()` is cal
 - **Setup callback throws:** caught, falls back to the `.restless/settings.json` defaults for the request.
 - **Malformed `.restless/settings.json`:** returns `null` from the loader → no auto-config, no crash.
 - **Non-serializable request body:** the adapters that read an already-parsed body (Fastify `req.body`, Koa `ctx.request.body`) serialize it defensively. `multipart/form-data` bodies are skipped (a stringified parsed multipart body is meaningless), and any body that `JSON.stringify` can't handle - e.g. the circular structures `@fastify/multipart`'s `attachFieldsToBody` produces - is dropped to no recorded body rather than throwing. The Express/Hono/Next/http adapters capture the raw request stream, so they're unaffected.
+- **Handler throws:** logged, fingerprinted by throw site, and re-thrown unchanged. See "Where the stack comes from" above; on Express this needs `app.use(restless.errorHandler)`.
 
 The overriding principle: observability never takes down the request path.

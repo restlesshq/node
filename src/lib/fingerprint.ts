@@ -209,24 +209,45 @@ function topUserFrame(
 
 // Strip absolute path prefix down to a project-relative path. The exact prefix
 // varies per machine; we want the same fingerprint on dev and prod.
-function projectRelative(file: string): string {
+export function projectRelative(file: string): string {
   const m = file.match(
     /\/(?:src|lib|app|api|routes|controllers|handlers)\/.+$/,
   );
   return m ? m[0].slice(1) : file.split("/").slice(-2).join("/");
 }
 
+// A single path segment that should collapse to `:id`. Each pattern is
+// fully anchored, so this is a whole-segment test rather than a scan.
+const SEG_UUID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const SEG_NUMERIC = /^[0-9]+$/;
+const SEG_LONG_HEX = /^[0-9a-f]{16,}$/i;
+
+function isIdSegment(segment: string): boolean {
+  return (
+    SEG_UUID.test(segment) ||
+    SEG_NUMERIC.test(segment) ||
+    SEG_LONG_HEX.test(segment)
+  );
+}
+
 // Replace path params with templates so /users/123 and /users/456 collapse.
 // If the customer already passed a templated route (/users/:id) this is a no-op.
-function normalizeRoute(route?: string): string {
+//
+// Implemented as a split-on-"/" whole-segment test rather than a scan with
+// a `(?=\/|$)` lookahead. Behaviourally identical (segment boundaries are
+// exactly where the lookahead fired), but lookahead is unsupported in RE2,
+// so the scanning form could not be ported to Go at all. Index 0 is skipped
+// because it is the text BEFORE the first "/" — the old pattern required a
+// leading slash, and skipping it keeps a bare "123" route untouched exactly
+// as before. See spec/CONTRACT.md FP-030.
+export function normalizeRoute(route?: string): string {
   if (!route) return "/";
-  return route
-    .replace(
-      /\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?=\/|$)/gi,
-      "/:id",
-    )
-    .replace(/\/\d+(?=\/|$)/g, "/:id")
-    .replace(/\/[0-9a-f]{16,}(?=\/|$)/gi, "/:id");
+  const segments = route.split("/");
+  for (let i = 1; i < segments.length; i++) {
+    if (isIdSegment(segments[i]!)) segments[i] = ":id";
+  }
+  return segments.join("/");
 }
 
 function extractMessage(body: unknown): string {
@@ -252,16 +273,44 @@ function extractMessage(body: unknown): string {
 // containing a digit (UUIDs, hex IDs, "user_abc123", "sk_live_4242", etc.).
 // Stripping just digits isn't enough: "abc123" would become "abc" and still
 // influence the key, breaking grouping when the surrounding ID changes.
+// `\s`, `\S`, `\w` and `\d` are spelled out below instead of used as
+// shorthands, because they mean DIFFERENT things in different engines and
+// this key has to be byte-identical in every SDK:
+//
+//   - `\w` / `\d` are ASCII-only in JS, Go RE2 and Ruby, but Unicode-aware
+//     in Python's `re` unless you pass `re.ASCII`.
+//   - `\s` is UNICODE in JS (it covers NBSP, the whole Zs category, and
+//     LS/PS) but ASCII-only in Go RE2 and in Python under `re.ASCII`.
+//
+// So the classes are enumerated once here and the contract carries the same
+// enumeration. WS is exactly the JS `\s` set; WORD is exactly the JS `\w`
+// set. `\b` is left as a shorthand HERE, but it is not universally safe:
+// Ruby's Onigmo defines `\b` against the Unicode word property even though
+// its `\w` is ASCII, so `/\ba/` matches "ea" in JS and Python and does
+// not in Ruby. A port on such an engine has to run this step against the
+// UTF-8 bytes or spell the boundary out. See spec/CONTRACT.md PRIM-003.
+// See spec/CONTRACT.md FP-040.
+const WS =
+  "\\t\\n\\v\\f\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff";
+const WORD = "A-Za-z0-9_";
+
+const RE_URL = new RegExp(`https?:\\/\\/[^${WS}]+`, "g");
+const RE_EMAIL = new RegExp(`[^${WS}]+@[^${WS}]+\\.[^${WS}]+`, "g");
+const RE_QUOTED = /['"`][^'"`]*['"`]/g;
+const RE_DIGIT_WORD = new RegExp(`\\b[${WORD}-]*[0-9][${WORD}-]*\\b`, "g");
+const RE_PUNCTUATION = new RegExp(`[^${WORD}${WS}-]`, "g");
+const RE_WS_RUN = new RegExp(`[${WS}]+`, "g");
+
 export function normalizeMessage(msg: string): string {
   if (!msg) return "";
   return msg
     .toLowerCase()
-    .replace(/https?:\/\/\S+/g, " ") // urls
-    .replace(/\S+@\S+\.\S+/g, " ") // emails
-    .replace(/['"`][^'"`]*['"`]/g, " ") // quoted user input
-    .replace(/\b[\w-]*\d[\w-]*\b/gi, " ") // any whole word containing a digit
-    .replace(/[^\w\s-]/g, " ") // residual punctuation
-    .replace(/\s+/g, " ")
+    .replace(RE_URL, " ") // urls
+    .replace(RE_EMAIL, " ") // emails
+    .replace(RE_QUOTED, " ") // quoted user input
+    .replace(RE_DIGIT_WORD, " ") // any whole word containing a digit
+    .replace(RE_PUNCTUATION, " ") // residual punctuation
+    .replace(RE_WS_RUN, " ")
     .trim()
     .split(" ")
     .filter((w) => w.length > 1)

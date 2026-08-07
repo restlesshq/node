@@ -21,6 +21,8 @@ import { loadSettings, resolveApi } from "./lib/settings.js";
 import { ensureEnvLoaded } from "./lib/env.js";
 import { resolveBaseUrl, isTestRun } from "./lib/uploader.js";
 import { universalMiddleware } from "./lib/universal.js";
+import { SPEC_VERSION, CONFORMANCE_LEVEL } from "./lib/version.js";
+import { errorHandler } from "./adapters/express.js";
 
 export type {
   ClientOptions,
@@ -54,6 +56,14 @@ export interface RestlessClient {
 
   /** Force-upload the queued batch. */
   flush(): Promise<void>;
+
+  /**
+   * Express-only. Register after your routes (`app.use(restless.errorHandler)`)
+   * so a handler that throws is fingerprinted by its throw site rather than
+   * by the text of your error page. Passes the error straight on; Express's
+   * own error handling is unaffected. See README.
+   */
+  errorHandler: typeof errorHandler;
 
   /** @internal: adapters only. */
   engine: CaptureEngine;
@@ -125,7 +135,10 @@ function restless(apiKey?: string, opts: ClientOptions = {}): RestlessClient {
 
   const engine = new CaptureEngine({
     apiKey: resolvedKey,
-    baseUrl: resolveBaseUrl(),
+    // Explicit option wins over RESTLESS_BASE_URL, which wins over the
+    // default. Same precedence as `base_url=` in the Python SDK and
+    // `WithBaseURL(...)` in Go.
+    baseUrl: resolveBaseUrl(opts.baseUrl),
     requestIdPrefix,
     fetchImpl: opts.fetch,
     redact: mergedRedact,
@@ -134,6 +147,7 @@ function restless(apiKey?: string, opts: ClientOptions = {}): RestlessClient {
   const client: RestlessClient = {
     engine,
     mask,
+    errorHandler,
     flush: () => engine.flush(),
     setup(cb) {
       engine.setCallback(cb);
@@ -156,10 +170,15 @@ function restless(apiKey?: string, opts: ClientOptions = {}): RestlessClient {
   return client;
 }
 
+export { errorHandler, SPEC_VERSION, CONFORMANCE_LEVEL };
+
 export default Object.assign(restless, {
   mask,
   newRequestId,
   formatRequestId,
   stripRequestIdPrefix,
+  errorHandler,
+  SPEC_VERSION,
+  CONFORMANCE_LEVEL,
   CaptureEngine,
 });

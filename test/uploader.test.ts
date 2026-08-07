@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { Uploader } from "../src/lib/uploader.js";
+import { SPEC_VERSION } from "../src/lib/version.js";
 import type { CapturedRequest } from "../src/types.js";
 
 function mkCaptured(id: string): CapturedRequest {
@@ -229,6 +230,25 @@ describe("Uploader", () => {
     up.push(mkCaptured("a"));
     await new Promise((r) => setTimeout(r, 0));
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends X-Restless-Spec-Version on every upload", async () => {
+    // CONTRACT.md META-002: the ingest attributes an off-contract payload
+    // to an SDK + spec version instead of guessing at it.
+    let init: any;
+    const fetchImpl = vi.fn(async (_url: string, i: any) => {
+      init = i;
+      return { ok: true, text: async () => "" } as any;
+    });
+    const up = new Uploader({
+      apiKey: "k",
+      baseUrl: "http://localhost:3003",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    up.push(mkCaptured("a"));
+    await up.flush();
+    expect(init.headers["X-Restless-Spec-Version"]).toBe(SPEC_VERSION);
+    expect(SPEC_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
   });
 
   it("swallows fetch errors", async () => {

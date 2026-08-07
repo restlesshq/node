@@ -195,13 +195,116 @@ export function applyInternalBodyMods(
  */
 export function lookupErrorRecovery(
   engine: CaptureEngine,
-  captured: Pick<CapturedRequest, "request" | "response" | "routePattern">,
+  captured: Pick<
+    CapturedRequest,
+    "request" | "response" | "routePattern" | "stackTrace"
+  >,
 ): { fingerprint?: Fingerprint; recovery?: string } {
   if (captured.response.status < 400) return {};
   const fingerprint = engine.computeFingerprint(captured as CapturedRequest);
   if (!fingerprint) return {};
   const recovery = engine.lookupRecovery(fingerprint.key);
   return { fingerprint, recovery };
+}
+
+/**
+ * v8 stack of whatever a handler threw, or `undefined` when there isn't one
+ * (a thrown string / plain object, or an Error with `stack` stripped). The
+ * stack is what makes the `stack` fingerprint strategy reachable: two
+ * different crashes on the same route group separately by throw site
+ * instead of collapsing into one normalized-message bucket.
+ */
+export function errorStack(err: unknown): string | undefined {
+  const stack = (err as { stack?: unknown } | null | undefined)?.stack;
+  return typeof stack === "string" && stack ? stack : undefined;
+}
+
+/**
+ * Status the framework will end up sending for a thrown error. `http-errors`
+ * (Express, Koa) and Hono's `HTTPException` both carry one; anything else is
+ * an unhandled crash, i.e. a 500.
+ */
+export function errorStatus(err: unknown): number {
+  const e = err as { status?: unknown; statusCode?: unknown } | null | undefined;
+  const raw = typeof e?.status === "number" ? e.status : e?.statusCode;
+  return typeof raw === "number" && raw >= 400 && raw <= 599 ? raw : 500;
+}
+
+/**
+ * Record a log for a request whose handler threw before any response was
+ * captured. The framework owns the response from here, so there is no body
+ * to fingerprint or inject into - but an uncaught exception is precisely
+ * the request an operator needs a log for, and it is the one case where the
+ * `stack` strategy fires.
+ *
+ * Swallows its own failures: an error raised in here would replace the
+ * customer's exception with ours (SAFETY-001). Callers re-throw the
+ * original, untouched.
+ */
+export function recordThrown(
+  engine: CaptureEngine,
+  err: unknown,
+  base: {
+    requestId: string;
+    startedAt: string;
+    duration: number;
+    routePattern?: string;
+    request: CapturedRequest["request"];
+    response?: Partial<CapturedRequest["response"]>;
+    user?: CapturedRequest["user"];
+  },
+): void {
+  try {
+    engine.record({
+      requestId: base.requestId,
+      startedAt: base.startedAt,
+      routePattern: base.routePattern,
+      request: base.request,
+      response: {
+        status: base.response?.status ?? errorStatus(err),
+        headers: base.response?.headers ?? {},
+        body: base.response?.body,
+      },
+      duration: base.duration,
+      user: base.user,
+      stackTrace: errorStack(err),
+    });
+  } catch {
+    /* observability never breaks the request path */
+  }
+}
+
+/**
+ * Key for the per-request capture state the Node-stream adapters (Express,
+ * bare http) hang off `req`, so code outside the middleware closure - the
+ * error middleware, the http handler wrapper - can reach it.
+ *
+ * `Symbol.for` on purpose: the package ships ESM and CJS builds, and a
+ * process can load both. A unique symbol per module instance would make the
+ * error middleware from one build invisible to the middleware from the
+ * other.
+ */
+export const CAPTURE_STATE = Symbol.for("@restlessai/sdk.captureState");
+
+/** Per-request state shared between the middleware and out-of-band hooks. */
+export interface CaptureState {
+  /** Error thrown downstream, stashed for the response-side capture. */
+  error?: unknown;
+  /** Set once the log has shipped, so the two paths can't double-record. */
+  recorded?: boolean;
+  /**
+   * Ship a log for a request whose handler threw and never responded.
+   * Assigned by the middleware once it has the request context; absent
+   * until then (a throw that early is the framework's, not the handler's).
+   */
+  recordThrow?: (err: unknown) => void;
+}
+
+/** Capture state for a Node request, if a Restless middleware is installed. */
+export function captureStateOf(req: unknown): CaptureState | undefined {
+  return (req as Record<symbol, CaptureState | undefined> | null | undefined)?.[
+    CAPTURE_STATE
+  ];
 }
 
 /**

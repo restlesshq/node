@@ -7,6 +7,8 @@ import {
   applyInternalBodyMods,
   lookupErrorRecovery,
   resolveBlock,
+  recordThrown,
+  errorStack,
   type SetupHandle,
 } from "./_shared.js";
 import {
@@ -60,9 +62,42 @@ function honoMiddleware(handle: SetupHandle) {
       }
     }
 
-    await next();
+    let failure: { err: unknown } | undefined;
+    try {
+      await next();
+    } catch (err) {
+      failure = { err };
+    }
 
     const duration = Date.now() - startTime;
+
+    if (failure) {
+      // A throw that made it back to us means nothing downstream (and no
+      // app.onError) built a response for it - Hono's own error handling
+      // still runs, above us, once we re-throw.
+      recordThrown(engine, failure.err, {
+        requestId: rawId,
+        startedAt,
+        duration,
+        routePattern: c.req.routePath,
+        request: {
+          method: req.method,
+          url: req.url,
+          headers: reqHeaders,
+          body: reqBody,
+        },
+        user: { apiKey: setup.apiKey, project: setup.project },
+      });
+      throw failure.err;
+    }
+
+    // Hono's compose catches a downstream throw itself, routes it to
+    // app.onError and stashes the exception on the context - so in that
+    // path `await next()` resolves normally and `c.res` is already the
+    // error response. Both routes to the same place: the stack, attached
+    // to the log below.
+    const stackTrace = errorStack(c.error);
+
     const res = c.res as Response;
 
     const resHeaders: Record<string, string> = {};
@@ -85,6 +120,7 @@ function honoMiddleware(handle: SetupHandle) {
         body: rawBody,
       },
       routePattern: c.req.routePath,
+      stackTrace,
     });
 
     const debug = buildDebugInjection({
@@ -134,6 +170,7 @@ function honoMiddleware(handle: SetupHandle) {
         apiKey: setup.apiKey,
         project: setup.project,
       },
+      stackTrace,
       errorFingerprint: fingerprint,
     });
   };
