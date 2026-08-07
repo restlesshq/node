@@ -150,6 +150,26 @@ export class CaptureEngine {
   }
 
   /**
+   * Recovery lookup for a whole fingerprint, honouring the transitional
+   * previous key (FP-047).
+   *
+   * Prefers the current key, so a message attached to the new group wins as
+   * soon as one exists, and falls back to the key this error used before the
+   * stack strategy became reachable. Without the fallback, turning that
+   * strategy on would silently stop injecting guidance a customer had
+   * already written, with nothing anywhere to indicate it.
+   */
+  lookupRecoveryFor(fingerprint: Fingerprint): string | undefined {
+    return (
+      this.lookupRecovery(fingerprint.key) ??
+      (fingerprint.previousKey
+        ? this.lookupRecovery(fingerprint.previousKey)
+        : undefined)
+    );
+  }
+
+
+  /**
    * Compute (or no-op for non-errors) the error fingerprint for a captured
    * request. Adapters call this BEFORE building the debug-injection so
    * they can look up a recovery message; the result is then attached to
@@ -171,6 +191,11 @@ export class CaptureEngine {
       route: captured.routePattern,
       responseHeaders: captured.response.headers,
       responseBody: parsed,
+      // Present only when an adapter caught the exception behind this
+      // response. It outranks the message strategy, so an identical
+      // crashing handler groups by throw site rather than by whatever
+      // prose the framework's error page happened to render.
+      stackTrace: captured.stackTrace,
     });
   }
 
@@ -202,6 +227,15 @@ export class CaptureEngine {
     const baseOwner: OwnerDetails & { id?: string } =
       id !== undefined ? { id } : {};
     const cacheKey = id || rest.apiKey;
+
+    // A blocked request never reaches the handler, and no adapter logs one
+    // except Fastify (whose onSend still fires). Enriching it is pure
+    // waste: without this, a banned tenant costs one database lookup per
+    // owner id, every time the cache expires, forever. Ship the id alone -
+    // it is still the dashboard's grouping key.
+    if (result.block) {
+      return { ...rest, project: baseOwner } as ResolvedSetup;
+    }
 
     // We cache the enriched VALUE (not just a freshness marker) so
     // every upload carries owner metadata, even when we skip running

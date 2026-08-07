@@ -1,5 +1,6 @@
 import type { CapturedRequest } from "../types.js";
 import { toHarEntry } from "./har.js";
+import { SPEC_VERSION } from "./version.js";
 
 const DEFAULT_BASE_URL = "https://ingress.restless.ai";
 const BATCH_SIZE = 10;
@@ -184,10 +185,17 @@ export class Uploader {
     {
       const seen = new Set<string>();
       for (const c of batch) {
-        const k = c.errorFingerprint?.key;
-        if (k && !seen.has(k)) {
-          seen.add(k);
-          batchFingerprints.push(k);
+        // Both keys, so the server can answer for either. FP-047: a project
+        // whose recovery message is still attached to the pre-stack-strategy
+        // key keeps getting it until the group migrates.
+        for (const k of [
+          c.errorFingerprint?.key,
+          c.errorFingerprint?.previousKey,
+        ]) {
+          if (k && !seen.has(k)) {
+            seen.add(k);
+            batchFingerprints.push(k);
+          }
         }
       }
     }
@@ -247,6 +255,11 @@ export class Uploader {
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${this.apiKey}`,
+          // Which contract version produced this payload. The ingest
+          // ignores it today; it exists so an off-contract payload can be
+          // attributed to an SDK + spec version instead of guessed at.
+          // See spec/CONTRACT.md META-002.
+          "X-Restless-Spec-Version": SPEC_VERSION,
         },
         body: JSON.stringify(payload),
       });

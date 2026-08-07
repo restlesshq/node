@@ -65,7 +65,11 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e:next": "npm run build && npm --prefix test/fixtures/next-app install && node test/fixtures/next-app/e2e.mjs && node test/fixtures/next-app/e2e.mjs --webpack",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "spec:vectors": "UPDATE_VECTORS=1 vitest run test/spec.vectors.test.ts",
+    "spec:driver": "tsup --config spec/driver/tsup.config.ts",
+    "spec:conformance": "npm run spec:driver && node spec/harness/run-vectors.mjs -- node spec/driver/.build/node.js",
+    "spec:fuzz": "npm run spec:driver && node spec/harness/fuzz.mjs --ref \"node spec/driver/.build/node.js\" --test \"node spec/driver/.build/node.js\""
   },
   "keywords": [
     "restless",

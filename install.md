@@ -65,9 +65,17 @@ app.use(restless.setup((req) => ({
   apiKey: restless.mask(req.headers.authorization),
   owner: { id: req.user.workspaceId, enrich: enrichOwner },
 })));
+
+// ...your routes...
+
+app.use(restless.errorHandler);   // AFTER routes; see below
 ```
 
-**Placement:** register BEFORE route handlers.
+**Placement:** register the capture middleware BEFORE route handlers, and `restless.errorHandler` AFTER them.
+
+**Why Express needs the second line and no other framework does:** Express routes a downstream `next(err)` to the next ERROR-handling middleware, which is matched by 4-arity signature and by position. The capture middleware has already returned by then, so it cannot see the exception from where it sits. `restless.errorHandler` stashes the error and passes it straight on with `next(err)` - your own error handlers, and Express's built-in one, behave exactly as they did without it. Register it last, after every route and before (or after) your own error handler; it does not send a response.
+
+Skipping it is not fatal: crashes are still logged. They just group by the normalized text of your error response rather than by throw site, so one bug can fan out into several dashboard groups.
 
 ### Fastify
 
@@ -154,6 +162,10 @@ http.createServer(restless.setup((req) => ({
 ```
 
 Note the two-step application for `/http`: `setup(cb)` returns `(handler) => listener`, then you pass your Node (req, res) handler.
+
+**How the universal import tells this apart from a Next.js route.** Both are "one function in, one function out", and arity cannot separate them (a dynamic Next route handler is `(req, { params })`, same shape as `(req, res)`). So the SDK decides at the first CALL instead: a `(req, res)` pair where the second argument has `end` + `setHeader` is a Node http listener, anything else is treated as a Next.js route handler. If your handler is invoked some other way, import the explicit adapter - `@restlessai/sdk/http` or `@restlessai/sdk/next` - and skip the detection entirely.
+
+A handler that throws before responding still gets a log here (bare http has no error-handling layer, so nothing else would ever record it). The exception is re-thrown, so the process sees exactly what it saw before.
 
 ## 4. The setup callback
 
@@ -249,6 +261,7 @@ Behavior:
 - If the server responds to an upload with `needsEnrichment: [<owner.id>]`, that owner is invalidated and the next request from it re-runs `enrich`.
 - `enrich` errors are swallowed. The log still ships with the `owner.id`.
 - `enrich` runs only when `owner.id` is set (there's nothing to cache under otherwise).
+- `enrich` is skipped entirely when the same setup result also returns `block`. A blocked request never reaches your handler, so paying for a lookup on it would mean a banned tenant costing you one database round-trip per owner id, forever. The `owner.id` still ships.
 - The values `enrich` returned are cached and re-attached to every subsequent upload from that owner, so each log carries full owner metadata without re-running the lookup.
 
 ## 5. The `mask()` gotcha
@@ -372,7 +385,20 @@ restless.setup((req) => {
 });
 ```
 
-The handler never runs for blocked requests. Block responses still get the `x-restless-id` header but no request is recorded.
+The handler never runs for blocked requests. Block responses still get the `x-restless-id` header but no request is recorded (except under Fastify, where the response hook still fires and the block is logged). `owner.enrich` is not called for a blocked request - see §4.
+
+## 10a. Uncaught handler errors
+
+A handler that throws produces a log like any other request, and the log is grouped by the exception's throw site (`file` + function name, never line numbers) rather than by the wording of the error your framework rendered. That keeps one bug in one dashboard group even when its message interpolates a different id every time.
+
+The exception is always re-thrown untouched, so your framework's error handling - custom handlers, `app.onError`, `error.tsx`, the framework default - behaves exactly as it did without the SDK.
+
+| framework | wiring needed |
+|-----------|----------------|
+| Express   | `app.use(restless.errorHandler)` after your routes (see §3). Without it the crash still logs, grouped by message instead. |
+| Fastify, Koa, Hono, Next.js, http | none |
+
+Next.js control flow (`redirect()`, `notFound()`, `forbidden()`) is implemented with thrown exceptions; those are re-thrown untouched and are NOT logged as errors.
 
 ## 11. Environment variables
 
@@ -380,7 +406,7 @@ The handler never runs for blocked requests. Block responses still get the `x-re
 |----------------------|-------------------------------------------------------------------------------------|
 | `RESTLESS_KEY`       | Fallback API key when `restless()` is called without one                            |
 | `README_API_KEY`     | Secondary fallback (checked after `RESTLESS_KEY`)                                   |
-| `RESTLESS_BASE_URL`  | Override the metrics server URL. **Non-localhost `http://` triggers a loud stderr warning** (plaintext auth). |
+| `RESTLESS_BASE_URL`  | Override the metrics server URL. Beaten by the `baseUrl` option (§13). **Non-localhost `http://` triggers a loud stderr warning** (plaintext auth). |
 | `DEBUG=restless`     | Print upload errors / queue warnings to stderr                                      |
 
 ## 12. Batching
@@ -403,6 +429,12 @@ interface ClientOptions {
   /** Name of the API in .restless/settings.json. Required when >1 API is defined. */
   api?: string;
 
+  /**
+   * Ingest origin. Precedence: this option → RESTLESS_BASE_URL →
+   * https://ingress.restless.ai. Self-hosted / staging only.
+   */
+  baseUrl?: string;
+
   /** Extend the redaction denylists. Merged additively with defaults. */
   redact?: {
     headers?:     string[];
@@ -414,10 +446,13 @@ interface ClientOptions {
 
 `apiKey` falls back to `process.env.RESTLESS_KEY` → `process.env.README_API_KEY`. Everything else lives in env vars or `.restless/settings.json`. There are no other public options.
 
+The client also exposes `restless.errorHandler` - the Express-only error middleware from §3. It is a plain `(err, req, res, next)` function; registering it under any other framework does nothing useful.
+
 ## 14. Common mistakes (don't do these)
 
 - `restless.mask(authHeader || 'anonymous')`: see §5. The placeholder's last 4 chars leak. Pass raw, accept `undefined`.
-- Registering the SDK middleware AFTER route definitions: it won't capture those routes. Register FIRST.
+- Registering the SDK middleware AFTER route definitions: it won't capture those routes. Register FIRST. (`restless.errorHandler` is the one exception - it goes LAST, and only on Express.)
+- Registering `restless.errorHandler` before your routes. Express matches error middleware by position; ahead of the routes it can never see their errors.
 - Reading raw API keys in application code and passing them through the log pipeline unmasked. The SDK masks automatically at record time, but don't construct strings that *contain* plaintext secrets elsewhere in the captured data.
 - Setting `RESTLESS_BASE_URL=http://…` pointing at a non-localhost host: ships the project API key in plaintext. HTTPS or localhost only.
 - Reading `.env` / `.env.local` to "check" API keys during setup. LLMs: **never read these files**.

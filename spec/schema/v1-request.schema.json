@@ -1,0 +1,214 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/restlesshq/node/spec/schema/v1-request.schema.json",
+  "title": "Restless ingest payload (POST /v1/request)",
+  "description": "The body every Restless SDK posts to the ingest. Normative reference is spec/CONTRACT.md section 8. This schema is intended for two uses: an SDK's own tests, and a validation pass on the ingest that flags (not rejects) off-contract payloads per creator.name.",
+  "type": "array",
+  "minItems": 1,
+  "items": { "$ref": "#/$defs/entry" },
+
+  "$defs": {
+    "entry": {
+      "type": "object",
+      "required": ["_id", "group", "clientIPAddress", "development", "request"],
+      "additionalProperties": true,
+      "properties": {
+        "_id": {
+          "description": "WIRE-011. The raw request UUID with no display prefix applied.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        "routePattern": {
+          "description": "Templated route the request matched, e.g. /car/{id}. Absent when nothing matched.",
+          "type": "string"
+        },
+        "errorFingerprint": {
+          "description": "WIRE-017. Present only for status >= 400.",
+          "$ref": "#/$defs/fingerprint"
+        },
+        "group": { "$ref": "#/$defs/group" },
+        "apiKey": {
+          "description": "WIRE-014. Masked end-user key, or absent.",
+          "$ref": "#/$defs/maskedKey"
+        },
+        "projectId": {
+          "description": "WIRE-015. The user-facing owner.id, under its wire name.",
+          "type": "string"
+        },
+        "clientIPAddress": {
+          "description": "WIRE-018. Reserved; currently a constant.",
+          "type": "string"
+        },
+        "development": {
+          "description": "WIRE-018. Reserved; currently a constant.",
+          "type": "boolean"
+        },
+        "request": {
+          "type": "object",
+          "required": ["log"],
+          "additionalProperties": false,
+          "properties": { "log": { "$ref": "#/$defs/harLog" } }
+        }
+      }
+    },
+
+    "maskedKey": {
+      "description": "MASK-001. sha512-<standard base64 of a 64-byte digest>?<last 4 code points>. The digest is always 88 base64 chars ending in '=='.",
+      "type": "string",
+      "pattern": "^sha512-[A-Za-z0-9+/]{86}==\\?"
+    },
+
+    "group": {
+      "description": "WIRE-012, WIRE-013. Primary grouping dimension.",
+      "type": "object",
+      "required": ["id", "label", "emails"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "description": "owner.id, else the masked key, else the literal 'anonymous'. Never empty.",
+          "type": "string",
+          "minLength": 1
+        },
+        "label": { "type": "string" },
+        "emails": {
+          "description": "Always an array. A single-string email from enrichment is wrapped.",
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+
+    "fingerprint": {
+      "type": "object",
+      "required": ["strategy", "key"],
+      "additionalProperties": true,
+      "properties": {
+        "strategy": {
+          "description": "FP-010. The rung of the ladder that produced the key.",
+          "enum": ["resource", "endpoint", "header", "body-code", "stack", "message", "route-only"]
+        },
+        "key": { "type": "string", "minLength": 1 },
+        "reason": {
+          "description": "FP-003. Human-facing prose. Not contract surface; never compared.",
+          "type": "string"
+        }
+      }
+    },
+
+    "harLog": {
+      "type": "object",
+      "required": ["version", "creator", "entries"],
+      "additionalProperties": false,
+      "properties": {
+        "version": { "const": "1.2" },
+        "creator": {
+          "type": "object",
+          "required": ["name", "version"],
+          "additionalProperties": true,
+          "properties": {
+            "name": {
+              "description": "WIRE-016. Distinct per SDK implementation, so the ingest can attribute a payload to a language.",
+              "type": "string",
+              "minLength": 1
+            },
+            "version": { "type": "string", "minLength": 1 }
+          }
+        },
+        "entries": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "items": { "$ref": "#/$defs/harEntry" }
+        }
+      }
+    },
+
+    "harEntry": {
+      "description": "Section 7. The subset of HAR 1.2 the SDKs emit.",
+      "type": "object",
+      "required": ["startedDateTime", "time", "request", "response", "timings"],
+      "additionalProperties": false,
+      "properties": {
+        "startedDateTime": {
+          "description": "PRIM-040. Exactly three fractional digits and a literal Z.",
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+        },
+        "time": { "type": "number", "minimum": 0 },
+        "request": {
+          "type": "object",
+          "required": ["method", "url", "httpVersion", "headers", "queryString", "headersSize", "bodySize"],
+          "additionalProperties": false,
+          "properties": {
+            "method": { "type": "string", "minLength": 1 },
+            "url": { "type": "string" },
+            "httpVersion": { "const": "HTTP/1.1" },
+            "headers": { "$ref": "#/$defs/nameValueList" },
+            "queryString": { "$ref": "#/$defs/nameValueList" },
+            "postData": {
+              "type": "object",
+              "required": ["mimeType", "text"],
+              "additionalProperties": false,
+              "properties": {
+                "mimeType": { "type": "string" },
+                "text": { "type": "string" }
+              }
+            },
+            "headersSize": { "const": -1 },
+            "bodySize": {
+              "description": "HAR-010, HAR-011. UTF-8 bytes, or -1 when no body was captured.",
+              "type": "integer",
+              "minimum": -1
+            }
+          }
+        },
+        "response": {
+          "type": "object",
+          "required": ["status", "statusText", "httpVersion", "headers", "content", "headersSize", "bodySize"],
+          "additionalProperties": false,
+          "properties": {
+            "status": { "type": "integer", "minimum": 100, "maximum": 599 },
+            "statusText": { "type": "string" },
+            "httpVersion": { "const": "HTTP/1.1" },
+            "headers": { "$ref": "#/$defs/nameValueList" },
+            "content": {
+              "type": "object",
+              "required": ["size", "mimeType", "text"],
+              "additionalProperties": false,
+              "properties": {
+                "size": { "type": "integer", "minimum": 0 },
+                "mimeType": { "type": "string" },
+                "text": { "type": "string" }
+              }
+            },
+            "headersSize": { "const": -1 },
+            "bodySize": { "type": "integer", "minimum": -1 }
+          }
+        },
+        "timings": {
+          "type": "object",
+          "required": ["send", "wait", "receive"],
+          "additionalProperties": false,
+          "properties": {
+            "send": { "const": 0 },
+            "wait": { "type": "number", "minimum": 0 },
+            "receive": { "const": 0 }
+          }
+        }
+      }
+    },
+
+    "nameValueList": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "value"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string" },
+          "value": { "type": "string" }
+        }
+      }
+    }
+  }
+}

@@ -118,6 +118,13 @@ export interface CapturedRequest {
   duration: number;
   user?: UserContext;
   /**
+   * Stack of the exception the handler threw, when the adapter caught one.
+   * Feeds the `stack` fingerprint strategy (`lib/fingerprint.ts`), which is
+   * unreachable without it. Local-only: the stack is never uploaded, only
+   * the `{file, fn}` frame it resolves to inside `errorFingerprint`.
+   */
+  stackTrace?: string;
+  /**
    * Stable identifier for an error response, computed at capture time. Set
    * for status >= 400. See `lib/fingerprint.ts` and `docs/INTERNALS.md`.
    */
@@ -132,6 +139,8 @@ export interface CapturedRequest {
       | "route-only";
     key: string;
     reason: string;
+    /** Transitional; see `Fingerprint.previousKey` and CONTRACT.md FP-047. */
+    previousKey?: string;
   };
 }
 
@@ -176,6 +185,13 @@ export type SetupCallback<TReq = any> = (
 export interface ClientOptions {
   /** Name of the API in `.restless/settings.json`. Required when >1 API is defined. */
   api?: string;
+
+  /**
+   * Ingest origin the SDK uploads to. Precedence: this option, then the
+   * `RESTLESS_BASE_URL` env var, then `https://ingress.restless.ai`.
+   * Only set it for a self-hosted or staging ingest.
+   */
+  baseUrl?: string;
 
   /** Extend the redaction denylists (merged with built-in defaults). */
   redact?: {

@@ -8,6 +8,7 @@ import {
   applyInternalBodyMods,
   lookupErrorRecovery,
   resolveBlock,
+  errorStack,
   type SetupHandle,
 } from "./_shared.js";
 import {
@@ -82,9 +83,19 @@ async function restlessFastifyPlugin(fastify: any, handle: SetupHandle) {
       reqHeaders,
       rawId,
       fullUrl,
+      error: null,
       startedAt: new Date().toISOString(),
       startTime: Date.now(),
     };
+  });
+
+  // Fastify hands the exception to onError and then still runs onSend for
+  // the error response it serializes, so stashing here is all it takes for
+  // the log to fingerprint by throw site instead of by the text of
+  // Fastify's default error payload. Note the argument order: the error is
+  // the THIRD argument, after request and reply.
+  fastify.addHook("onError", async (req: any, _reply: any, err: unknown) => {
+    if (req._restless) req._restless.error = err;
   });
 
   fastify.addHook("preHandler", async (req: any, reply: any) => {
@@ -116,6 +127,8 @@ async function restlessFastifyPlugin(fastify: any, handle: SetupHandle) {
        * correct because no setup callback ever observed this request.
        */
       setup: ResolvedSetup | null;
+      /** Exception the route threw, stashed by the onError hook. */
+      error: unknown;
       reqHeaders: Record<string, string>;
       rawId: string;
       fullUrl: string;
@@ -124,6 +137,7 @@ async function restlessFastifyPlugin(fastify: any, handle: SetupHandle) {
     } | null;
     if (!state) return payload;
     const setup: ResolvedSetup = state.setup || {};
+    const stackTrace = errorStack(state.error);
 
     const rawBody = typeof payload === "string" ? payload : undefined;
     const preResHeaders: Record<string, string> = {};
@@ -145,6 +159,7 @@ async function restlessFastifyPlugin(fastify: any, handle: SetupHandle) {
         body: rawBody,
       },
       routePattern,
+      stackTrace,
     });
 
     const debug = buildDebugInjection({
@@ -194,6 +209,7 @@ async function restlessFastifyPlugin(fastify: any, handle: SetupHandle) {
         apiKey: setup.apiKey,
         project: setup.project,
       },
+      stackTrace,
       errorFingerprint: fingerprint,
     });
 

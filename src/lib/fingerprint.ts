@@ -38,6 +38,25 @@ export type Fingerprint = {
   strategy: Strategy;
   key: string;
   reason: string;
+  /**
+   * TRANSITIONAL. The key the ladder would have produced if the `stack`
+   * strategy had not fired.
+   *
+   * Until the adapters started capturing exceptions, `stackTrace` was never
+   * populated, so the `stack` strategy never ran and every uncaught 5xx fell
+   * through to `message` (or `route-only`). Turning it on is a strict
+   * improvement - prose keys split when an error message is reworded and
+   * collide when two unrelated bugs read alike - but it MOVES the key, and a
+   * moved key silently orphans the Agent Recovery message attached to it.
+   *
+   * So the SDK ships both. Both are uploaded, so the server can answer for
+   * either, and `lookupRecovery` falls back to this one, which keeps an
+   * existing recovery message working while the group migrates.
+   *
+   * Remove once no project has a recovery message attached to a 5xx
+   * `message`-strategy group. See spec/CONTRACT.md FP-047.
+   */
+  previousKey?: string;
 };
 
 const CODE_FIELDS = ["code", "error_code", "errorCode", "type"] as const;
@@ -116,6 +135,9 @@ export function fingerprint(err: CapturedError): Fingerprint {
         strategy: "stack",
         key: `${status}:${frame.file}:${frame.fn}`,
         reason: `top user frame: ${frame.fn} in ${frame.file}`,
+        // FP-047. What this error keyed on before the stack strategy became
+        // reachable, so an already-attached recovery message survives.
+        previousKey: fallbackKey(status, method, err),
       };
     }
   }
@@ -137,6 +159,23 @@ export function fingerprint(err: CapturedError): Fingerprint {
     key: `${status}:${method}:${route}`,
     reason: "no usable code or message; falling back to status + route",
   };
+}
+
+/**
+ * The key the last two rungs of the ladder produce. Factored out so the
+ * stack strategy can report what it displaced (FP-047) without duplicating
+ * the logic it would otherwise have run.
+ */
+export function fallbackKey(
+  status: number,
+  method: string,
+  err: CapturedError,
+): string {
+  const route = normalizeRoute(err.route);
+  const msg = normalizeMessage(extractMessage(err.responseBody));
+  return msg
+    ? `${status}:${method}:${route}:${msg}`
+    : `${status}:${method}:${route}`;
 }
 
 function readHeaderCode(headers?: Record<string, string>): string | null {
@@ -207,26 +246,83 @@ function topUserFrame(
   return null;
 }
 
-// Strip absolute path prefix down to a project-relative path. The exact prefix
-// varies per machine; we want the same fingerprint on dev and prod.
-function projectRelative(file: string): string {
-  const m = file.match(
-    /\/(?:src|lib|app|api|routes|controllers|handlers)\/.+$/,
+const PROJECT_DIRS = new Set([
+  "src",
+  "lib",
+  "app",
+  "api",
+  "routes",
+  "controllers",
+  "handlers",
+]);
+
+/**
+ * Strip the machine-specific path prefix down to a project-relative path, so
+ * the same source file fingerprints identically on a laptop and in
+ * production.
+ *
+ * Takes the LAST project directory in the path, not the first. The
+ * difference is the whole point:
+ *
+ *   /Users/dev/proj/src/db/users.js   -> src/db/users.js
+ *   /app/src/db/users.js              -> src/db/users.js
+ *   /opt/render/project/src/db/users.js -> src/db/users.js
+ *
+ * A first-match rule returns `app/src/db/users.js` for the middle one,
+ * because the deployment root IS the first match. Docker's conventional
+ * `WORKDIR /app` and Heroku both root there, so first-match made production
+ * disagree with development for a large share of deployments, defeating the
+ * only thing this function exists to do.
+ *
+ * The trade-off is that a nested layout (`/proj/src/a/src/x.js`) collapses
+ * to `src/x.js` rather than `src/a/src/x.js`. That is much rarer than an
+ * /app root, and still machine-independent, which is the property that
+ * matters.
+ *
+ * See spec/CONTRACT.md FP-042.
+ */
+export function projectRelative(file: string): string {
+  const segments = file.split("/");
+  // Stop before the final component: a project dir has to have something
+  // after it to be a directory at all.
+  for (let i = segments.length - 2; i >= 0; i--) {
+    if (PROJECT_DIRS.has(segments[i]!)) return segments.slice(i).join("/");
+  }
+  return segments.slice(-2).join("/");
+}
+
+// A single path segment that should collapse to `:id`. Each pattern is
+// fully anchored, so this is a whole-segment test rather than a scan.
+const SEG_UUID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const SEG_NUMERIC = /^[0-9]+$/;
+const SEG_LONG_HEX = /^[0-9a-f]{16,}$/i;
+
+function isIdSegment(segment: string): boolean {
+  return (
+    SEG_UUID.test(segment) ||
+    SEG_NUMERIC.test(segment) ||
+    SEG_LONG_HEX.test(segment)
   );
-  return m ? m[0].slice(1) : file.split("/").slice(-2).join("/");
 }
 
 // Replace path params with templates so /users/123 and /users/456 collapse.
 // If the customer already passed a templated route (/users/:id) this is a no-op.
-function normalizeRoute(route?: string): string {
+//
+// Implemented as a split-on-"/" whole-segment test rather than a scan with
+// a `(?=\/|$)` lookahead. Behaviourally identical (segment boundaries are
+// exactly where the lookahead fired), but lookahead is unsupported in RE2,
+// so the scanning form could not be ported to Go at all. Index 0 is skipped
+// because it is the text BEFORE the first "/" — the old pattern required a
+// leading slash, and skipping it keeps a bare "123" route untouched exactly
+// as before. See spec/CONTRACT.md FP-030.
+export function normalizeRoute(route?: string): string {
   if (!route) return "/";
-  return route
-    .replace(
-      /\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?=\/|$)/gi,
-      "/:id",
-    )
-    .replace(/\/\d+(?=\/|$)/g, "/:id")
-    .replace(/\/[0-9a-f]{16,}(?=\/|$)/gi, "/:id");
+  const segments = route.split("/");
+  for (let i = 1; i < segments.length; i++) {
+    if (isIdSegment(segments[i]!)) segments[i] = ":id";
+  }
+  return segments.join("/");
 }
 
 function extractMessage(body: unknown): string {
@@ -252,16 +348,44 @@ function extractMessage(body: unknown): string {
 // containing a digit (UUIDs, hex IDs, "user_abc123", "sk_live_4242", etc.).
 // Stripping just digits isn't enough: "abc123" would become "abc" and still
 // influence the key, breaking grouping when the surrounding ID changes.
+// `\s`, `\S`, `\w` and `\d` are spelled out below instead of used as
+// shorthands, because they mean DIFFERENT things in different engines and
+// this key has to be byte-identical in every SDK:
+//
+//   - `\w` / `\d` are ASCII-only in JS, Go RE2 and Ruby, but Unicode-aware
+//     in Python's `re` unless you pass `re.ASCII`.
+//   - `\s` is UNICODE in JS (it covers NBSP, the whole Zs category, and
+//     LS/PS) but ASCII-only in Go RE2 and in Python under `re.ASCII`.
+//
+// So the classes are enumerated once here and the contract carries the same
+// enumeration. WS is exactly the JS `\s` set; WORD is exactly the JS `\w`
+// set. `\b` is left as a shorthand HERE, but it is not universally safe:
+// Ruby's Onigmo defines `\b` against the Unicode word property even though
+// its `\w` is ASCII, so `/\ba/` matches "ea" in JS and Python and does
+// not in Ruby. A port on such an engine has to run this step against the
+// UTF-8 bytes or spell the boundary out. See spec/CONTRACT.md PRIM-003.
+// See spec/CONTRACT.md FP-040.
+const WS =
+  "\\t\\n\\v\\f\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff";
+const WORD = "A-Za-z0-9_";
+
+const RE_URL = new RegExp(`https?:\\/\\/[^${WS}]+`, "g");
+const RE_EMAIL = new RegExp(`[^${WS}]+@[^${WS}]+\\.[^${WS}]+`, "g");
+const RE_QUOTED = /['"`][^'"`]*['"`]/g;
+const RE_DIGIT_WORD = new RegExp(`\\b[${WORD}-]*[0-9][${WORD}-]*\\b`, "g");
+const RE_PUNCTUATION = new RegExp(`[^${WORD}${WS}-]`, "g");
+const RE_WS_RUN = new RegExp(`[${WS}]+`, "g");
+
 export function normalizeMessage(msg: string): string {
   if (!msg) return "";
   return msg
     .toLowerCase()
-    .replace(/https?:\/\/\S+/g, " ") // urls
-    .replace(/\S+@\S+\.\S+/g, " ") // emails
-    .replace(/['"`][^'"`]*['"`]/g, " ") // quoted user input
-    .replace(/\b[\w-]*\d[\w-]*\b/gi, " ") // any whole word containing a digit
-    .replace(/[^\w\s-]/g, " ") // residual punctuation
-    .replace(/\s+/g, " ")
+    .replace(RE_URL, " ") // urls
+    .replace(RE_EMAIL, " ") // emails
+    .replace(RE_QUOTED, " ") // quoted user input
+    .replace(RE_DIGIT_WORD, " ") // any whole word containing a digit
+    .replace(RE_PUNCTUATION, " ") // residual punctuation
+    .replace(RE_WS_RUN, " ")
     .trim()
     .split(" ")
     .filter((w) => w.length > 1)

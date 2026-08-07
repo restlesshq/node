@@ -7,6 +7,7 @@ import {
   applyInternalBodyMods,
   lookupErrorRecovery,
   resolveBlock,
+  recordThrown,
   type SetupHandle,
 } from "./_shared.js";
 import {
@@ -46,6 +47,13 @@ function isRestlessWrapped(fn: unknown): boolean {
   );
 }
 
+/** Stamp the marker. Shared with the universal middleware, which produces
+ *  its own wrapper and has to participate in the same guard. */
+function markRestlessWrapped<T>(fn: T): T {
+  Object.defineProperty(fn, WRAP_MARK, { value: true, enumerable: false });
+  return fn;
+}
+
 /**
  * Bodies we read for capture: text-like content types only, bounded size,
  * never SSE. Everything else still gets captured (headers stamped, log
@@ -72,6 +80,21 @@ function isCapturableBody(headers: Record<string, string>): boolean {
   return !(Number.isFinite(len) && len > MAX_CAPTURE_BODY_BYTES);
 }
 
+/**
+ * Next uses thrown exceptions for control flow: `redirect()`, `notFound()`,
+ * `forbidden()` and friends all throw, and every one of them is a normal
+ * outcome rather than a crash. They are tagged with a `digest` string
+ * (`NEXT_REDIRECT;replace;/login;307;`, `NEXT_NOT_FOUND`, ...), which is the
+ * only signal available without importing `next` at runtime (an optional
+ * peer dep the SDK must not pull in). Matching the prefix keeps newer tags
+ * covered. Recording these would fill the dashboard with 500s that never
+ * happened.
+ */
+function isNextControlFlow(err: unknown): boolean {
+  const digest = (err as { digest?: unknown } | null | undefined)?.digest;
+  return typeof digest === "string" && digest.startsWith("NEXT_");
+}
+
 function nextWrapFactory(handle: SetupHandle) {
   if (!isSetupHandle(handle)) {
     throw new Error(
@@ -83,7 +106,7 @@ function nextWrapFactory(handle: SetupHandle) {
 
   return function wrap<T extends NextHandler>(handler: T): T {
     if (isRestlessWrapped(handler)) return handler;
-    const wrapped = (async (req: Request, ctx?: any) => {
+    const wrapped = markRestlessWrapped((async (req: Request, ctx?: any) => {
       // `next build` invokes static-eligible GET handlers to prerender their
       // responses. Capturing there would upload synthetic build-time traffic
       // and bake request-id/debug headers into the static output.
@@ -131,7 +154,30 @@ function nextWrapFactory(handle: SetupHandle) {
         }
       }
 
-      const res = await handler(req, ctx);
+      let res: Response;
+      try {
+        res = await handler(req, ctx);
+      } catch (err) {
+        // Next turns an uncaught route error into its own 500; the
+        // exception itself never reaches a response we can read, so
+        // without this the crash produces no log at all.
+        if (isNextControlFlow(err)) throw err;
+        recordThrown(engine, err, {
+          requestId: rawId,
+          startedAt,
+          duration: Date.now() - startTime,
+          request: {
+            method: req.method,
+            url: req.url,
+            headers: reqHeaders,
+            body: reqBody,
+          },
+          user: { apiKey: setup.apiKey, project: setup.project },
+        });
+        // Untouched: Next's error handling sees exactly what it would
+        // have without the SDK (SAFETY-001).
+        throw err;
+      }
       const duration = Date.now() - startTime;
 
       const resHeaders: Record<string, string> = {};
@@ -233,11 +279,7 @@ function nextWrapFactory(handle: SetupHandle) {
         status: res.status,
         headers: finalHeaders,
       });
-    }) as T;
-    Object.defineProperty(wrapped, WRAP_MARK, {
-      value: true,
-      enumerable: false,
-    });
+    }) as T);
     return wrapped;
   };
 }
@@ -335,4 +377,10 @@ export function wrapRouteHandler(
   return autoWrapFor(config)(handler as NextHandler);
 }
 
-export default Object.assign(restlessNext, { wrap: nextWrapFactory });
+export default Object.assign(restlessNext, {
+  wrap: nextWrapFactory,
+  // @internal - the universal middleware builds its own wrapper and has to
+  // take part in the same double-wrap guard.
+  isWrapped: isRestlessWrapped,
+  mark: markRestlessWrapped,
+});
