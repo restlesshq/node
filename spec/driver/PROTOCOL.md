@@ -83,7 +83,6 @@ idiomatic casing in its public API but MUST accept these names here.
 | `normalizeRoute` | `{route: string\|null}` | `string` |
 | `normalizeMessage` | `{message: string}` | `string` |
 | `projectRelative` | `{file: string}` | `string` |
-| `fallbackKey` | `{status: number, method?: string, route?: string, responseBody?: any}` | `string` |
 
 `fingerprint` returns **only** `strategy` and `key`. The `reason` field is
 human-facing prose and is explicitly not contract surface (CONTRACT.md

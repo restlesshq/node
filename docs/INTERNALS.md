@@ -216,23 +216,6 @@ A crash with a 4xx status (`http-errors`-style `err.status`) does not use the st
 
 ## Agent Recovery messages
 
-### The transitional `previousKey`
-
-Turning the `stack` strategy on moves the fingerprint for every uncaught
-5xx: those errors used to fall through to the `message` strategy, because no
-adapter populated `stackTrace` and the strategy never ran. A moved key
-orphans whatever Agent Recovery guidance was attached to it, silently.
-
-So a `stack` fingerprint also carries `previousKey`, the key the ladder
-would have produced without it. Both keys are uploaded, so the server can
-answer for either, and `engine.lookupRecoveryFor()` prefers the current key
-and falls back to the previous one. A customer's existing guidance keeps
-being injected while the group migrates.
-
-This is temporary. Drop it once no project has a recovery message on a 5xx
-`message`-strategy group. See spec/CONTRACT.md FP-047.
-
-
 A customer can attach a "next steps" message to a fingerprint group via the dashboard's Agent Recovery page (the `/errors` view). When the SDK sees an error whose fingerprint has a saved message, it injects the message into the response body's `debug.recovery` field so the calling agent has actionable guidance without an extra round-trip.
 
 The lookup is on the hot path of every 4xx/5xx, so the design is sync and cache-first:

@@ -139,8 +139,6 @@ export interface CapturedRequest {
       | "route-only";
     key: string;
     reason: string;
-    /** Transitional; see `Fingerprint.previousKey` and CONTRACT.md FP-047. */
-    previousKey?: string;
   };
 }
 

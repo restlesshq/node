@@ -740,30 +740,6 @@ FP-042 is NOT exempted by this. Path normalization is fully shared, so it
 is verified everywhere through the `projectRelative` operation, which takes
 an already-extracted path and is therefore dialect-free.
 
-**FP-047** (SHOULD, transitional) When the `stack` strategy fires, the
-fingerprint SHOULD also carry `previousKey`: the key the ladder would have
-produced without it.
-
-Both keys SHOULD be uploaded, so the ingest can answer a recovery lookup for
-either, and a recovery lookup SHOULD prefer the current key and fall back to
-`previousKey`.
-
-This exists because turning the `stack` strategy on MOVES the key for every
-uncaught 5xx. Before adapters captured exceptions, `stackTrace` was never
-populated, so the strategy never ran and those errors fell through to
-`message` or `route-only`. The change is a strict improvement (prose keys
-split when a message is reworded and collide when two unrelated bugs read
-alike), but a moved key silently orphans the Agent Recovery message attached
-to it, which is exactly the failure CHANGE-004 warns about.
-
-Carrying both keys makes the transition invisible to a customer: guidance
-they already wrote keeps being injected while the group migrates.
-
-Remove once no project has a recovery message attached to a 5xx
-`message`-strategy group. An implementation that has never shipped a
-`message`-strategy key for an uncaught 5xx (any SDK newer than this
-requirement) MAY omit it.
-
 Vectors: `spec/vectors/fingerprint.json`.
 
 ---

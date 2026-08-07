@@ -38,25 +38,6 @@ export type Fingerprint = {
   strategy: Strategy;
   key: string;
   reason: string;
-  /**
-   * TRANSITIONAL. The key the ladder would have produced if the `stack`
-   * strategy had not fired.
-   *
-   * Until the adapters started capturing exceptions, `stackTrace` was never
-   * populated, so the `stack` strategy never ran and every uncaught 5xx fell
-   * through to `message` (or `route-only`). Turning it on is a strict
-   * improvement - prose keys split when an error message is reworded and
-   * collide when two unrelated bugs read alike - but it MOVES the key, and a
-   * moved key silently orphans the Agent Recovery message attached to it.
-   *
-   * So the SDK ships both. Both are uploaded, so the server can answer for
-   * either, and `lookupRecovery` falls back to this one, which keeps an
-   * existing recovery message working while the group migrates.
-   *
-   * Remove once no project has a recovery message attached to a 5xx
-   * `message`-strategy group. See spec/CONTRACT.md FP-047.
-   */
-  previousKey?: string;
 };
 
 const CODE_FIELDS = ["code", "error_code", "errorCode", "type"] as const;
@@ -135,9 +116,6 @@ export function fingerprint(err: CapturedError): Fingerprint {
         strategy: "stack",
         key: `${status}:${frame.file}:${frame.fn}`,
         reason: `top user frame: ${frame.fn} in ${frame.file}`,
-        // FP-047. What this error keyed on before the stack strategy became
-        // reachable, so an already-attached recovery message survives.
-        previousKey: fallbackKey(status, method, err),
       };
     }
   }
@@ -159,23 +137,6 @@ export function fingerprint(err: CapturedError): Fingerprint {
     key: `${status}:${method}:${route}`,
     reason: "no usable code or message; falling back to status + route",
   };
-}
-
-/**
- * The key the last two rungs of the ladder produce. Factored out so the
- * stack strategy can report what it displaced (FP-047) without duplicating
- * the logic it would otherwise have run.
- */
-export function fallbackKey(
-  status: number,
-  method: string,
-  err: CapturedError,
-): string {
-  const route = normalizeRoute(err.route);
-  const msg = normalizeMessage(extractMessage(err.responseBody));
-  return msg
-    ? `${status}:${method}:${route}:${msg}`
-    : `${status}:${method}:${route}`;
 }
 
 function readHeaderCode(headers?: Record<string, string>): string | null {

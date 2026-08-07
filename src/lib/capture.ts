@@ -149,24 +149,6 @@ export class CaptureEngine {
     return typeof v === "string" ? v : undefined;
   }
 
-  /**
-   * Recovery lookup for a whole fingerprint, honouring the transitional
-   * previous key (FP-047).
-   *
-   * Prefers the current key, so a message attached to the new group wins as
-   * soon as one exists, and falls back to the key this error used before the
-   * stack strategy became reachable. Without the fallback, turning that
-   * strategy on would silently stop injecting guidance a customer had
-   * already written, with nothing anywhere to indicate it.
-   */
-  lookupRecoveryFor(fingerprint: Fingerprint): string | undefined {
-    return (
-      this.lookupRecovery(fingerprint.key) ??
-      (fingerprint.previousKey
-        ? this.lookupRecovery(fingerprint.previousKey)
-        : undefined)
-    );
-  }
 
 
   /**
