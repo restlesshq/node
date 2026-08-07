@@ -343,3 +343,56 @@ describe("express adapter (one-liner)", () => {
     expect(typeof restless.flush).toBe("function");
   });
 });
+
+describe("SAFETY-007: request-body capture ceiling", () => {
+  beforeEach(() => _resetSettingsCache());
+
+  async function capture(body: string, contentType: string) {
+    const { fetchImpl, uploads } = bodyCollector();
+    const restless = restlessExpress("rdme_test", {
+      baseUrl: "http://localhost:3003",
+      fetch: fetchImpl as unknown as typeof fetch,
+    });
+    const mw = restless.setup(() => ({}));
+    await run(
+      mw,
+      (req, res) => {
+        // Drain the body the way a body parser would, so the push patch runs.
+        req.on("data", () => {});
+        req.on("end", () => {
+          res.setHeader("content-type", "application/json");
+          res.end('{"ok":true}');
+        });
+      },
+      { method: "POST", path: "/upload", headers: { "content-type": contentType }, body },
+    );
+    await restless.flush();
+    return uploads[0]?.request?.log?.entries?.[0];
+  }
+
+  it("records a body over 1 MiB as bodyless rather than truncated", async () => {
+    // Dropping is deliberate, not laziness. Redaction runs BEFORE truncation
+    // (REDACT-033) and needs complete JSON to parse. A buffer cut at the
+    // truncation limit would hand redactBody a broken document, parsing would
+    // fail, and the fragment would ship UNREDACTED with whatever secret it
+    // still contained. Dropping is safe; truncating before redaction is not.
+    const entry = await capture("x".repeat(2 * 1024 * 1024), "text/plain");
+    expect(entry).toBeDefined();
+    expect(entry.request.postData).toBeUndefined();
+    // The log still ships with headers intact: losing the body is not losing
+    // the request.
+    expect(entry.request.method).toBe("POST");
+    expect(entry.response.status).toBe(200);
+  });
+
+  it("still captures and redacts a body under the ceiling", async () => {
+    const entry = await capture(
+      JSON.stringify({ hello: "world", password: "hunter2hunter2" }),
+      "application/json",
+    );
+    const text = entry.request.postData.text as string;
+    expect(text).toContain("<REDACTED:");
+    // The property the ceiling exists to protect: redaction actually ran.
+    expect(text).not.toContain("hunter2hunter2");
+  });
+});

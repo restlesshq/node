@@ -68,9 +68,13 @@ jobs:
           HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
           changed=$(git diff --name-only "$BASE" "$HEAD")
-          surface=$(echo "$changed" | grep -E '^src/lib/(mask|redact|fingerprint|har|requestId)\.ts$' || true)
+          surface=$(echo "$changed" | grep -E '^src/(lib/(mask|redact|fingerprint|har|requestId|capture)\.ts|adapters/_shared\.ts)$' || true)
           spec=$(echo "$changed" | grep -E '^spec/' || true)
 
+          # capture.ts owns the redaction pipeline and fingerprint reuse;
+          # _shared.ts owns recoverySlug (INJECT-005/007) and the debug
+          # injection. Both can change conformance-relevant output, so both
+          # belong in the guard even though neither is under src/lib/*.
           if [ -n "$surface" ] && [ -z "$spec" ]; then
             echo "::error::These files are cross-SDK contract surface:"
             echo "$surface" | sed 's/^/  /'

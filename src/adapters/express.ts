@@ -1,4 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+
+/** SAFETY-007 capture ceiling for a buffered body. */
+const MAX_CAPTURE_BODY_BYTES = 1024 * 1024;
 import type { ClientOptions, SetupCallback } from "../types.js";
 import { type RestlessClient } from "../index.js";
 import {
@@ -68,19 +71,38 @@ function expressMiddleware(handle: SetupHandle) {
     // produced a log with no body at all. Copying at `push` is invisible to
     // the handler either way: it receives the exact chunk it would have.
     const reqChunks: Buffer[] = [];
+    let reqBytes = 0;
+    // SAFETY-007. Past this we stop retaining and record the request
+    // bodyless, exactly as the response path does. A 500 MB upload must not
+    // be held in memory just to be thrown away by truncation later.
+    //
+    // Note this is the 1 MiB capture ceiling, NOT the 256 KiB
+    // MAX_BODY_BYTES truncation limit, and the gap is deliberate. Redaction
+    // runs BEFORE truncation (REDACT-033) and needs syntactically complete
+    // JSON to parse: cutting the buffer at 256 KiB would hand redactBody a
+    // truncated document, it would fail to parse, and it would pass the
+    // fragment through UNREDACTED. Dropping the body entirely is safe;
+    // truncating it before redaction is not.
+    let reqOverflow = false;
     const origPush = typeof req.push === "function" ? req.push.bind(req) : null;
     if (origPush) {
       (req as unknown as { push: unknown }).push = (
         chunk: unknown,
         encoding?: BufferEncoding,
       ) => {
-        if (chunk !== null && chunk !== undefined) {
+        if (chunk !== null && chunk !== undefined && !reqOverflow) {
           try {
-            reqChunks.push(
+            const buf =
               typeof chunk === "string"
                 ? Buffer.from(chunk, encoding || "utf8")
-                : Buffer.from(chunk as Buffer),
-            );
+                : Buffer.from(chunk as Buffer);
+            reqBytes += buf.length;
+            if (reqBytes > MAX_CAPTURE_BODY_BYTES) {
+              reqOverflow = true;
+              reqChunks.length = 0;
+            } else {
+              reqChunks.push(buf);
+            }
           } catch {
             /* unrepresentable chunk: capture bodyless, never break the read */
           }
@@ -264,28 +286,6 @@ function expressMiddleware(handle: SetupHandle) {
 }
 
 type ExpressMiddleware = ReturnType<typeof expressMiddleware>;
-
-/**
- * Express error middleware. Register it AFTER your routes:
- *
- *     app.use(restless.setup(cb));
- *     app.use('/api', routes);
- *     app.use(restless.errorHandler);   // ← last
- *
- * Why it has to be yours to register: Express routes a downstream
- * `next(err)` to the next ERROR-handling middleware, and error middleware
- * is matched by 4-arity signature and position. The capture middleware has
- * long since returned by then, so it cannot see the error from where it
- * sits - there is no hook, and faking one would mean patching Express
- * internals. Registering this is the difference between a crashing handler
- * grouping by throw site (`stack` strategy) and grouping by the normalized
- * text of the error page.
- *
- * It only stashes. The error is passed straight on with `next(err)`, so
- * Express's own error handling - yours or the built-in one - behaves
- * exactly as it did without the SDK, and the log is still written by the
- * `res.end` that error handling triggers.
- */
 
 /**
  * One-liner factory:

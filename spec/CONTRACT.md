@@ -1158,9 +1158,20 @@ response hook and 500s the request.
 **SAFETY-006** (MUST) `multipart/form-data` bodies are skipped. A
 serialized parse of multipart is meaningless.
 
-**SAFETY-007** (MUST) Capture MUST NOT buffer unbounded response bodies.
-Streaming responses (`text/event-stream`) and bodies over 1 MiB are
-recorded without a body; headers are still stamped.
+**SAFETY-007** (MUST) Capture MUST NOT buffer an unbounded body, in either
+direction. Streaming responses (`text/event-stream`) and request or response
+bodies over 1 MiB are recorded WITHOUT a body; headers are still stamped.
+
+Recorded without a body, not truncated, and the distinction is a security
+one. Redaction runs before truncation (REDACT-033) and needs syntactically
+complete JSON to parse. Cutting the buffer at the REDACT-030 limit would
+hand the redactor a truncated document, parsing would fail, and the fragment
+would pass through UNREDACTED with any secret in it intact. Dropping the
+body is safe; truncating it before redaction is not.
+
+The 1 MiB capture ceiling is therefore deliberately well above the 256 KiB
+truncation limit: anything plausibly redactable is still parsed whole, while
+a large upload cannot exhaust memory.
 
 **SAFETY-008** (MUST) The capture path MUST NOT perform blocking I/O.
 Uploads are asynchronous and fire-and-forget.
