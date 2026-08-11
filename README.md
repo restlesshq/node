@@ -92,5 +92,4 @@ Full per-framework examples are in [`install.md`](./install.md).
 - **[spec/](./spec/)**: the cross-language SDK contract. This package is the reference implementation for every Restless SDK; `spec/` holds the normative spec, generated conformance vectors, and a harness that runs them against an implementation in any language.
 
 ## License
-
-ISC
+MIT

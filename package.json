@@ -84,7 +84,7 @@
     "nextjs"
   ],
   "author": "Restless",
-  "license": "ISC",
+  "license": "MIT",
   "devDependencies": {
     "@types/node": "^22.0.0",
     "tsup": "^8.3.0",
