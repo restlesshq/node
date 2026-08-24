@@ -41,6 +41,26 @@ jobs:
       - name: Install Anthropic SDK
         run: npm install --prefix "${{ runner.temp }}/ai-review-deps" --no-save --no-package-lock --ignore-scripts @anthropic-ai/sdk@latest
 
+      # Restore the review tooling from the PR's BASE, not its head. GitHub takes
+      # the workflow YAML from base for pull_request events, but the *script* is
+      # whatever the checkout contains. Without this, a PR could rewrite
+      # .github/scripts/ and have its own code executed with ANTHROPIC_API_KEY
+      # and GH_TOKEN in scope. Treat .github/ in the PR as untrusted.
+      - name: Restore review tooling from base
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          # Just this file, in place. Restoring all of .github/ would delete
+          # files a PR legitimately adds and breaks when .github/ is new.
+          # PR_BASE_SHA arrives as an env var, never inlined - see the Slack
+          # alert step in security-scan.yml for why that rule exists.
+          if git cat-file -e "$PR_BASE_SHA:.github/scripts/ai-review.mjs" 2>/dev/null; then
+            git checkout "$PR_BASE_SHA" -- .github/scripts/ai-review.mjs
+            echo "Reviewer restored from base."
+          else
+            echo "Base has no reviewer at .github/scripts/ai-review.mjs; using this PR's copy."
+          fi
+
       - name: Review
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
