@@ -41,23 +41,51 @@ if (!BASE_REF || !/^[A-Za-z0-9._/-]+$/.test(BASE_REF) || BASE_REF.startsWith("-"
 // 1. Get the diff against the PR's base branch. argv-array exec (no shell), so
 //    nothing in REPO / BASE_REF / PR_NUMBER can be interpreted as a command.
 execFileSync("git", ["fetch", "--no-tags", "origin", BASE_REF], { stdio: "inherit" });
-const diff = execFileSync("git", ["diff", `origin/${BASE_REF}...HEAD`], {
+const rawDiff = execFileSync("git", ["diff", `origin/${BASE_REF}...HEAD`], {
   encoding: "utf8",
   maxBuffer: 64 * 1024 * 1024,
 });
 
-if (!diff.trim()) {
+if (!rawDiff.trim()) {
   console.log("Empty diff, nothing to review.");
   process.exit(0);
 }
 
+
+// --- diff-budget hardening -------------------------------------------------
+// Rewriting every file's line endings inflates a diff enormously, which can
+// push the one change that matters past the truncation limit and out of the
+// review entirely. That makes mass line-ending churn a context-flooding attack
+// on this budget. So: review the whitespace-insensitive diff, and give the
+// model the churn count as its own signal instead of tens of thousands of
+// lines that differ only by a carriage return.
+const _range = `origin/${BASE_REF}...HEAD`;
+const _g = (a) => execFileSync("git", a, { encoding: "utf8", maxBuffer: 256 * 1024 * 1024 });
+const _allFiles = _g(["diff", "--name-only", "-z", _range]).split("\0").filter(Boolean);
+// NB: `-w --name-only` does NOT filter the file list; `--numstat` does.
+const _substantive = new Set(
+  _g(["diff", "-w", "--ignore-blank-lines", "--numstat", "-z", _range])
+    .split("\0").filter(Boolean).map((r) => r.split("\t").pop()).filter(Boolean),
+);
+const whitespaceOnlyFiles = _allFiles.filter((f) => !_substantive.has(f));
+const diff = _g(["diff", "-w", "--ignore-blank-lines", _range]);
+
+const CHURN_NOTE = whitespaceOnlyFiles.length
+  ? `NOTE: ${whitespaceOnlyFiles.length} file(s) in this PR changed ONLY in whitespace or ` +
+    `line endings, and have been excluded from the diff below. Mass line-ending churn was ` +
+    `a known way to bury a malicious change in an unreviewable diff: treat a large count as ` +
+    `suspicious in itself, and read the remaining diff with that in mind.\n\n`
+  : "";
+// ---------------------------------------------------------------------------
+
 // Generous guard so a runaway diff can't blow the request up. Opus has a 1M
 // context window, so this only trips on genuinely huge PRs.
 const MAX_DIFF_CHARS = 700_000;
-const reviewBody =
+const _clipped =
   diff.length > MAX_DIFF_CHARS
     ? diff.slice(0, MAX_DIFF_CHARS) + "\n\n[diff truncated for length]"
     : diff;
+const reviewBody = CHURN_NOTE + _clipped;
 const truncated = diff.length > MAX_DIFF_CHARS;
 
 // 2. Ask Claude to review, with a structured verdict so parsing is reliable.
@@ -131,7 +159,10 @@ const result = JSON.parse(jsonText);
 
 // 3. Decide pass/fail. Trust a blocking finding over the verdict field.
 const blocking = (result.issues ?? []).filter((i) => i.severity === "blocking");
-const failed = result.verdict === "fail" || blocking.length > 0;
+// FAIL CLOSED on truncation. A diff too large to read in full is exactly the
+// shape a diff-flooding attack produces; "nothing found" in a partial review is
+// not evidence of safety.
+const failed = result.verdict === "fail" || blocking.length > 0 || truncated;
 
 // 4. Build a sticky comment.
 const MARKER = "<!-- ai-review-bot -->";
@@ -150,7 +181,11 @@ if ((result.issues ?? []).length) {
     lines.push(`| ${icon[i.severity] ?? ""} ${i.severity} | \`${i.file}\` | ${desc} |`);
   }
 }
-if (truncated) lines.push("", "_Note: the diff was truncated; very large PRs are only partially reviewed._");
+if (truncated)
+  lines.push(
+    "",
+    "_\u26d4 The diff was too large to review in full, so this check **fails closed**. Split the PR into smaller changes, or raise `MAX_DIFF_CHARS` in a deliberate, reviewed change._",
+  );
 lines.push("", "_Automated review by Claude. Not a substitute for human judgment on sensitive changes._");
 
 const commentBody = lines.join("\n");
