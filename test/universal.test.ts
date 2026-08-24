@@ -69,7 +69,7 @@ describe("universal middleware: runtime framework detection", () => {
     // encapsulated child scope. The plugin runs and adds onRequest/onSend
     // hooks, but those hooks attach to the child — not the parent where
     // user routes live. Result: hooks never fire, no logs ever ship.
-    // See node-sdk/src/lib/universal.ts and the matching markers on the
+    // See src/lib/universal.ts and the matching markers on the
     // dedicated Fastify adapter (src/adapters/fastify.ts).
     const client = mkClient();
     const mw = client.setup(() => ({ apiKey: "k" }));
