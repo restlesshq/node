@@ -41,6 +41,14 @@ jobs:
       - name: Install Anthropic SDK
         run: npm install --prefix "${{ runner.temp }}/ai-review-deps" --no-save --no-package-lock --ignore-scripts @anthropic-ai/sdk@latest
 
+      # Restore the review tooling from the PR's BASE, not its head. GitHub takes
+      # the workflow YAML from base for pull_request events, but the *script* is
+      # whatever the checkout contains. Without this, a PR could rewrite
+      # .github/scripts/ and have its own code executed with ANTHROPIC_API_KEY
+      # and GH_TOKEN in scope. The 2026-08-23 worm rewrote .github/ in `logs`.
+      - name: Restore review tooling from base
+        run: git checkout ${{ github.event.pull_request.base.sha }} -- .github/
+
       - name: Review
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
