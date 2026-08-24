@@ -47,7 +47,15 @@ jobs:
       # .github/scripts/ and have its own code executed with ANTHROPIC_API_KEY
       # and GH_TOKEN in scope. The 2026-08-23 worm rewrote .github/ in `logs`.
       - name: Restore review tooling from base
-        run: git checkout ${{ github.event.pull_request.base.sha }} -- .github/
+        run: |
+          # Just this file, in place. Restoring all of .github/ would delete
+          # files a PR legitimately adds and breaks when .github/ is new.
+          if git cat-file -e "${{ github.event.pull_request.base.sha }}:.github/scripts/ai-review.mjs" 2>/dev/null; then
+            git checkout "${{ github.event.pull_request.base.sha }}" -- .github/scripts/ai-review.mjs
+            echo "Reviewer restored from base."
+          else
+            echo "Base has no reviewer at .github/scripts/ai-review.mjs; using this PR's copy."
+          fi
 
       - name: Review
         env:
