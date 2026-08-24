@@ -52,13 +52,13 @@ if (!rawDiff.trim()) {
 }
 
 
-// --- 2026-08-23 incident hardening -----------------------------------------
-// The worm rewrote every file to CRLF. That inflated the diff so the one real
-// change (a 30KB blob in postcss.config.mjs) sat near the truncation edge, and
-// the review came back noting "the diff was truncated". Mass line-ending churn
-// is a context-flooding attack on this budget. So: review the whitespace-
-// insensitive diff, and give the model the churn count as its own signal
-// instead of tens of thousands of lines that differ only by a carriage return.
+// --- diff-budget hardening -------------------------------------------------
+// Rewriting every file's line endings inflates a diff enormously, which can
+// push the one change that matters past the truncation limit and out of the
+// review entirely. That makes mass line-ending churn a context-flooding attack
+// on this budget. So: review the whitespace-insensitive diff, and give the
+// model the churn count as its own signal instead of tens of thousands of
+// lines that differ only by a carriage return.
 const _range = `origin/${BASE_REF}...HEAD`;
 const _g = (a) => execFileSync("git", a, { encoding: "utf8", maxBuffer: 256 * 1024 * 1024 });
 const _allFiles = _g(["diff", "--name-only", "-z", _range]).split("\0").filter(Boolean);
@@ -73,7 +73,7 @@ const diff = _g(["diff", "-w", "--ignore-blank-lines", _range]);
 const CHURN_NOTE = whitespaceOnlyFiles.length
   ? `NOTE: ${whitespaceOnlyFiles.length} file(s) in this PR changed ONLY in whitespace or ` +
     `line endings, and have been excluded from the diff below. Mass line-ending churn was ` +
-    `the camouflage layer in a real supply-chain attack on this org: treat a large count as ` +
+    `a known way to bury a malicious change in an unreviewable diff: treat a large count as ` +
     `suspicious in itself, and read the remaining diff with that in mind.\n\n`
   : "";
 // ---------------------------------------------------------------------------
@@ -160,7 +160,7 @@ const result = JSON.parse(jsonText);
 // 3. Decide pass/fail. Trust a blocking finding over the verdict field.
 const blocking = (result.issues ?? []).filter((i) => i.severity === "blocking");
 // FAIL CLOSED on truncation. A diff too large to read in full is exactly the
-// shape the 2026-08-23 attack produced; "nothing found" in a partial review is
+// shape a diff-flooding attack produces; "nothing found" in a partial review is
 // not evidence of safety.
 const failed = result.verdict === "fail" || blocking.length > 0 || truncated;
 
