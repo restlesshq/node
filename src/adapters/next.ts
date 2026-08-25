@@ -80,6 +80,106 @@ function isCapturableBody(headers: Record<string, string>): boolean {
   return !(Number.isFinite(len) && len > MAX_CAPTURE_BODY_BYTES);
 }
 
+/** Rebuild the templated route from the params Next extracted: `/api/pets/42`
+ *  plus `{ id: "42" }` gives `/api/pets/{id}`. Why: docs/INTERNALS.md. */
+export function routePatternFromParams(
+  pathname: string,
+  params: Record<string, unknown>,
+): string {
+  const pending = templatedParams(params);
+  const segments = pathname.split("/");
+  const out: string[] = [];
+
+  for (let i = 0; i < segments.length; ) {
+    // Leftmost match wins, and each param is consumed once. Ambiguous when a
+    // value equals another literal segment: see docs/INTERNALS.md.
+    const hit = pending.findIndex(([, value]) =>
+      Array.isArray(value)
+        ? i + value.length <= segments.length &&
+          value.every((v, k) => decodeSegment(segments[i + k]!) === v)
+        : decodeSegment(segments[i]!) === value,
+    );
+    if (hit === -1) {
+      out.push(segments[i]!);
+      i += 1;
+      continue;
+    }
+    const [name, value] = pending.splice(hit, 1)[0]!;
+    out.push(`{${name}}`);
+    // A catch-all collapses its whole span to ONE `{slug}`: the point is to
+    // mark what varies, and a multi-segment value fits no OpenAPI path anyway.
+    i += Array.isArray(value) ? value.length : 1;
+  }
+
+  return out.join("/");
+}
+
+/** Substitutable params, in route order. An optional catch-all that matched
+ *  nothing arrives empty and has nothing to put back. */
+function templatedParams(
+  params: Record<string, unknown>,
+): Array<[string, string | string[]]> {
+  const out: Array<[string, string | string[]]> = [];
+  for (const [name, value] of Object.entries(params)) {
+    if (typeof value === "string") {
+      if (value) out.push([name, value]);
+    } else if (Array.isArray(value)) {
+      const parts = value.filter(
+        (v): v is string => typeof v === "string" && !!v,
+      );
+      if (parts.length) out.push([name, parts]);
+    }
+  }
+  return out;
+}
+
+/** A path segment as Next would have decoded it into `params`. */
+function decodeSegment(segment: string): string {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    // A malformed escape can't be what Next decoded a param value from.
+    return segment;
+  }
+}
+
+/** `context.params`, or undefined when this isn't a route-handler context at
+ *  all. "No params" must stay distinct from "unknown": docs/INTERNALS.md. */
+async function readParams(
+  ctx: unknown,
+): Promise<Record<string, unknown> | undefined> {
+  try {
+    // Next gives a paramless route `{ params: undefined }` (measured on
+    // 16.2), so the KEY is the signal, not the value.
+    if (!ctx || typeof ctx !== "object" || !("params" in ctx)) return undefined;
+    const raw = (ctx as { params?: unknown }).params;
+    if (raw === undefined || raw === null) return {};
+    // A promise on Next 15+, a plain object before that; `await` takes both.
+    const resolved = await raw;
+    if (!resolved || typeof resolved !== "object") return undefined;
+    return resolved as Record<string, unknown>;
+  } catch {
+    // Observability never breaks the request path (SAFETY-001).
+    return undefined;
+  }
+}
+
+/** Resolved once, up front, because the throw path below needs it too. */
+async function resolveRoutePattern(
+  url: string,
+  ctx: unknown,
+): Promise<string | undefined> {
+  const params = await readParams(ctx);
+  if (!params) return undefined;
+  let pathname: string;
+  try {
+    pathname = new URL(url).pathname;
+  } catch {
+    return undefined;
+  }
+  return routePatternFromParams(pathname, params);
+}
+
 /**
  * Next uses thrown exceptions for control flow: `redirect()`, `notFound()`,
  * `forbidden()` and friends all throw, and every one of them is a normal
@@ -154,6 +254,11 @@ function nextWrapFactory(handle: SetupHandle) {
         }
       }
 
+      // Recovered from the params Next extracted, since the App Router
+      // exposes no matched-route string. Resolved before the handler is
+      // called so the throw path below has it too.
+      const routePattern = await resolveRoutePattern(req.url, ctx);
+
       let res: Response;
       try {
         res = await handler(req, ctx);
@@ -166,6 +271,7 @@ function nextWrapFactory(handle: SetupHandle) {
           requestId: rawId,
           startedAt,
           duration: Date.now() - startTime,
+          routePattern,
           request: {
             method: req.method,
             url: req.url,
@@ -201,6 +307,7 @@ function nextWrapFactory(handle: SetupHandle) {
           headers: resHeaders,
           body: rawBody,
         },
+        routePattern,
       });
 
       const debug = buildDebugInjection({
@@ -211,8 +318,7 @@ function nextWrapFactory(handle: SetupHandle) {
         fingerprint: fingerprint?.key,
         strategy: fingerprint?.strategy,
         method: req.method,
-        // Next doesn't expose a matched route pattern; 404s here fall into the
-        // `endpoint` bucket and the dig-in lists available endpoints.
+        path: routePattern,
         portalUrl: engine.portalUrl,
       });
 
@@ -243,6 +349,7 @@ function nextWrapFactory(handle: SetupHandle) {
       engine.record({
         requestId: rawId,
         startedAt,
+        routePattern,
         request: {
           method: req.method,
           url: req.url,
