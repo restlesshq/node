@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import restlessNext, {
   wrapRouteHandler,
   defineConfig,
+  routePatternFromParams,
   type RestlessNextConfig,
 } from "../src/adapters/next.js";
 
@@ -340,5 +341,189 @@ describe("error debug injection still applies through wrapRouteHandler", () => {
     expect(body.error).toBe("nope");
     expect(body.debug.log).toContain("/logs/");
     expect(body.debug.recovery).toContain("fetch ");
+  });
+});
+
+/**
+ * The App Router hands a handler no matched-route string, so the adapter
+ * rebuilds one from `context.params`. What hangs off it: the 404 split
+ * (`404:resource` vs `404:endpoint`, which carry opposite advice), the
+ * `routePattern` the dashboard folds traffic onto, and the dig-in slug.
+ */
+describe("route pattern recovery from context.params", () => {
+  it("templates a single param out of the path", () => {
+    expect(routePatternFromParams("/api/pets/42", { id: "42" })).toBe(
+      "/api/pets/{id}",
+    );
+  });
+
+  it("templates several params, and only the segments they occupy", () => {
+    expect(
+      routePatternFromParams("/api/orgs/acme/pets/42", {
+        org: "acme",
+        id: "42",
+      }),
+    ).toBe("/api/orgs/{org}/pets/{id}");
+  });
+
+  it("returns the path unchanged for a static route", () => {
+    expect(routePatternFromParams("/api/health", {})).toBe("/api/health");
+  });
+
+  it("collapses a catch-all's segments into one template", () => {
+    expect(
+      routePatternFromParams("/api/blog/2026/08/hello", {
+        slug: ["2026", "08", "hello"],
+      }),
+    ).toBe("/api/blog/{slug}");
+  });
+
+  it("ignores an optional catch-all that matched nothing", () => {
+    expect(routePatternFromParams("/api/blog", { slug: [] })).toBe("/api/blog");
+    expect(routePatternFromParams("/api/blog", { slug: undefined })).toBe(
+      "/api/blog",
+    );
+  });
+
+  it("matches an encoded segment against the value Next decoded", () => {
+    expect(
+      routePatternFromParams("/api/pets/mr%20fluffy", { name: "mr fluffy" }),
+    ).toBe("/api/pets/{name}");
+  });
+
+  it("leaves a malformed escape as a literal segment", () => {
+    // decodeURIComponent throws on this; the segment can't be a param value.
+    expect(routePatternFromParams("/api/pets/%E0%A4%A", { id: "42" })).toBe(
+      "/api/pets/%E0%A4%A",
+    );
+  });
+
+  it("templates left to right when two params carry the same value", () => {
+    expect(
+      routePatternFromParams("/api/a/pets/a", { org: "a", id: "a" }),
+    ).toBe("/api/{org}/pets/{id}");
+  });
+
+  it("does not template a literal segment that merely looks like an id", () => {
+    // `42` is the org id here; the trailing `42` is part of the route.
+    expect(routePatternFromParams("/api/42/42", { org: "42" })).toBe(
+      "/api/{org}/42",
+    );
+  });
+
+  it("ships the recovered pattern on the upload", async () => {
+    const { config, fetchImpl } = mkConfig();
+    const GET = wrapRouteHandler(async () => Response.json({ ok: true }), config);
+
+    await GET(new Request("http://localhost/api/pets/42"), {
+      params: Promise.resolve({ id: "42" }),
+    });
+
+    const payload = await uploadedPayload(fetchImpl);
+    expect(payload[0].routePattern).toBe("/api/pets/{id}");
+  });
+
+  it("groups a 404 on a parameterized route as a missing RESOURCE", async () => {
+    const { config, fetchImpl } = mkConfig();
+    const GET = wrapRouteHandler(
+      async () => Response.json({ error: "no such pet" }, { status: 404 }),
+      config,
+    );
+
+    const res = await GET(new Request("http://localhost/api/pets/42"), {
+      params: Promise.resolve({ id: "42" }),
+    });
+    expect(res.status).toBe(404);
+
+    const payload = await uploadedPayload(fetchImpl);
+    expect(payload[0].errorFingerprint.strategy).toBe("resource");
+    expect(payload[0].errorFingerprint.key).toBe("404:resource");
+    // The dig-in URL now names the operation instead of `unknown.md`.
+    expect((await res.json()).debug.recovery).toContain("get-api-pets-id.md");
+  });
+
+  it("groups a 404 on a paramless route as an unknown ENDPOINT", async () => {
+    const { config, fetchImpl } = mkConfig();
+    const GET = wrapRouteHandler(
+      async () => Response.json({ error: "nope" }, { status: 404 }),
+      config,
+    );
+
+    await GET(new Request("http://localhost/api/pets"), {
+      params: Promise.resolve({}),
+    });
+
+    const payload = await uploadedPayload(fetchImpl);
+    expect(payload[0].errorFingerprint.strategy).toBe("endpoint");
+    expect(payload[0].routePattern).toBe("/api/pets");
+  });
+
+  it("reports the concrete path for a paramless route (params key, no value)", async () => {
+    // What Next actually hands a route with no dynamic segments.
+    const { config, fetchImpl } = mkConfig();
+    const GET = wrapRouteHandler(async () => Response.json({ ok: true }), config);
+
+    await GET(new Request("http://localhost/api/health"), {
+      params: undefined,
+    });
+
+    const payload = await uploadedPayload(fetchImpl);
+    expect(payload[0].routePattern).toBe("/api/health");
+  });
+
+  it("reports no pattern at all when there is no params key to read", async () => {
+    const { config, fetchImpl } = mkConfig();
+    const GET = wrapRouteHandler(async () => Response.json({ ok: true }), config);
+
+    // No context (the universal-middleware path can call a handler bare):
+    // "unknown", which is not the same as "this route has no params".
+    await GET(new Request("http://localhost/api/pets/42"));
+
+    const payload = await uploadedPayload(fetchImpl);
+    expect(payload[0].routePattern).toBeUndefined();
+  });
+
+  it("survives a context whose params getter throws", async () => {
+    const { config, fetchImpl } = mkConfig();
+    const GET = wrapRouteHandler(async () => Response.json({ ok: true }), config);
+
+    const hostile = {
+      get params(): never {
+        throw new Error("boom");
+      },
+    };
+    const res = await GET(new Request("http://localhost/api/pets/42"), hostile);
+
+    expect(res.status).toBe(200);
+    const payload = await uploadedPayload(fetchImpl);
+    expect(payload[0].routePattern).toBeUndefined();
+  });
+
+  it("carries the pattern onto the log when the handler throws", async () => {
+    const { config, fetchImpl } = mkConfig();
+    const GET = wrapRouteHandler(async () => {
+      throw new Error("crashInHandler");
+    }, config);
+
+    await expect(
+      GET(new Request("http://localhost/api/pets/42"), {
+        params: Promise.resolve({ id: "42" }),
+      }),
+    ).rejects.toThrow("crashInHandler");
+
+    const payload = await uploadedPayload(fetchImpl);
+    expect(payload[0].routePattern).toBe("/api/pets/{id}");
+  });
+
+  it("accepts a plain params object (Next 14 and earlier)", async () => {
+    const { config, fetchImpl } = mkConfig();
+    const GET = wrapRouteHandler(async () => Response.json({ ok: true }), config);
+
+    await GET(new Request("http://localhost/api/pets/42"), {
+      params: { id: "42" },
+    });
+
+    const payload = await uploadedPayload(fetchImpl);
+    expect(payload[0].routePattern).toBe("/api/pets/{id}");
   });
 });

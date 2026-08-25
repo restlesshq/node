@@ -214,6 +214,30 @@ The per-request state hangs off `req` under `Symbol.for("@restlessai/sdk.capture
 
 A crash with a 4xx status (`http-errors`-style `err.status`) does not use the stack strategy: the ladder reserves it for `status >= 500`. Non-`Error` throws (strings, plain objects) carry no stack and fall through to the message / route-only strategies.
 
+### Where the route pattern comes from
+
+Three keys in the ladder are built from the route (`message`, `route-only`, and the 404 split), and the templated route also ships as `routePattern` on the log, where the dashboard folds traffic onto OpenAPI operations, and feeds `recoverySlug` (the dig-in URL's `<method>-<route>.md` tail). Each adapter sources it from its own router:
+
+| adapter | where the pattern comes from |
+|---|---|
+| Express | `req.route.path`, with `:id` rewritten to `{id}` |
+| Fastify | `req.routeOptions.url`, same rewrite |
+| Koa | `ctx._matchedRoute` (koa-router), passed through as-is |
+| Hono | `c.req.routePath`, passed through as-is |
+| Next.js | rebuilt from `context.params` - see below |
+| http | none. Bare `http` has no router, so there is no pattern to read |
+
+**Next.js is the odd one out.** The App Router hands a handler no matched-route string: the pattern IS the file path, and neither the request nor the context carries it. What the context does carry is `params`, the concrete values Next pulled out of this URL, so the adapter substitutes them back out of the pathname: `/api/pets/42` plus `{ id: "42" }` gives `/api/pets/{id}`. Details that matter:
+
+- **Matching is by decoded value, left to right, one consumption per param.** Params arrive keyed in route order, so two params carrying the same value still template in the right order. A segment is compared as `decodeURIComponent` would leave it, because Next hands over decoded values.
+- **A catch-all collapses to one template.** `[...slug]` matching three segments yields a single `{slug}`, not three. The point is to mark the part that varies; a multi-segment value can't line up with an OpenAPI path either way.
+- **"No params" is an answer; "unreadable" is not, and the `params` KEY is what separates them.** Next hands a paramless route handler `{ params: undefined }` - measured on 16.2, the key is present and the value is not - so the presence of the key means "this is a route-handler context" whatever the value, and the concrete path IS the pattern. A context WITHOUT the key is something else (a bare call through the universal middleware, a Pages Router `(req, res)` pair), and so is a `params` that throws: both report no pattern at all, the pre-existing behavior, rather than passing a concrete path off as a template.
+- **Reading it costs one await, and adds no failure mode.** `params` is a promise on Next 15+ (a plain object before that, which `await` passes through). Every handler on a parameterized route already awaits the same promise to read its ids, so one that never settled would hang the route with or without the SDK. It is resolved before the handler runs, so the throw path gets it too.
+
+Why it earns the trouble: without a pattern, `normalizeRoute` turns every Next route into `/`, which has no `:`/`{` in it, so **every** 404 the app returns lands in `404:endpoint` - including a handler's own "no such pet" on a live parameterized endpoint, which belongs in `404:resource` and needs the opposite advice. `404:resource` was unreachable on Next entirely, and every dig-in URL slugged to `unknown`.
+
+The pattern is recovered identically on all three Next entry points (the explicit `@restlessai/sdk/next` wrap, `withRestless`'s generated `wrapRouteHandler` call, and the universal middleware, which forwards the context through to the same wrapper).
+
 ## Agent Recovery messages
 
 A customer can attach a "next steps" message to a fingerprint group via the dashboard's Agent Recovery page (the `/errors` view). When the SDK sees an error whose fingerprint has a saved message, it injects the message into the response body's `debug.recovery` field so the calling agent has actionable guidance without an extra round-trip.
