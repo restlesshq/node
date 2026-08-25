@@ -1169,6 +1169,18 @@ document its own choices; none of it is compared for conformance.
   Django. There is no requirement to match the set.
 - **Framework auto-detection.** Node's duck-typed universal middleware is a
   JavaScript-ism. Ports SHOULD prefer explicit per-framework integrations.
+- **Where the route pattern comes from.** The `message` and `route-only`
+  keys (FP-010), the 404 split (FP-014) and the dig-in slug (INJECT-005) are
+  all only as good as the templated route the adapter hands them, and every
+  framework exposes it differently: a router attribute (Express
+  `req.route.path`, Koa `ctx._matchedRoute`), or nothing at all. An adapter
+  with no router-provided pattern SHOULD reconstruct one where the framework
+  exposes the extracted path parameters instead (Node's Next.js adapter
+  rebuilds `/api/pets/{id}` from `/api/pets/42` plus `{ id: "42" }`), and
+  SHOULD report no pattern rather than pass a concrete path off as a
+  template. A concrete path still carrying an id reads as a paramless route
+  under FP-014, which sends every 404 to the `endpoint` bucket and its
+  opposite advice.
 - **Stack frame parsing and skip lists** (FP-044).
 - **Test-runner detection** (BATCH-008). Node keys on `NODE_ENV=test`,
   `VITEST`, `JEST_WORKER_ID`, `NODE_TEST_CONTEXT`, `AVA_PATH`. Python would

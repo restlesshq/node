@@ -135,6 +135,27 @@ try {
   );
   check("404 original body intact", missingBody.error === "no such widget");
 
+  // Parameterized route: the pattern is recovered from `params`, so the hit
+  // reports a templated path and the miss is a missing RESOURCE, not an
+  // unknown endpoint.
+  const pet = await fetch(`${base}/api/pets/1`, {
+    headers: { "x-workspace": "ws_42" },
+  });
+  check("GET /api/pets/1 200", pet.status === 200);
+  check("GET /api/pets/1 body intact", (await pet.json()).name === "fluffy");
+
+  const noPet = await fetch(`${base}/api/pets/999`, {
+    headers: { "x-workspace": "ws_42" },
+  });
+  check("GET /api/pets/999 404", noPet.status === 404);
+  const noPetBody = await noPet.json();
+  check("pet 404 original body intact", noPetBody.error === "no such pet");
+  check(
+    "404 dig-in URL names the operation, not `unknown`",
+    (noPetBody.debug?.recovery || "").includes("get-api-pets-id.md"),
+    noPetBody.debug?.recovery,
+  );
+
   // Static route: prerendered, no injected headers.
   const stat = await fetch(`${base}/api/static`);
   check("GET /api/static 200", stat.status === 200);
@@ -165,6 +186,7 @@ try {
   );
   check("ingress got POST /api/hello", urls.includes("POST /api/hello"));
   check("ingress got GET /api/missing", urls.includes("GET /api/missing"));
+  check("ingress got GET /api/pets/1", urls.includes("GET /api/pets/1"));
   check(
     "ingress did NOT get static or edge",
     !urls.some((u) => u.includes("/api/static") || u.includes("/api/edge")),
@@ -192,6 +214,34 @@ try {
   check(
     "404 capture has an error fingerprint",
     typeof missingEntry?.errorFingerprint?.key === "string",
+    JSON.stringify(missingEntry?.errorFingerprint),
+  );
+
+  // Route pattern recovery, against a real Next build.
+  const petEntry = received.find((e) =>
+    e.request.log.entries[0].request.url.endsWith("/api/pets/1"),
+  );
+  check(
+    "parameterized route uploads the templated pattern",
+    petEntry?.routePattern === "/api/pets/{id}",
+    JSON.stringify(petEntry?.routePattern),
+  );
+  const noPetEntry = received.find((e) =>
+    e.request.log.entries[0].request.url.endsWith("/api/pets/999"),
+  );
+  check(
+    "404 on a parameterized route groups as a missing resource",
+    noPetEntry?.errorFingerprint?.key === "404:resource",
+    JSON.stringify(noPetEntry?.errorFingerprint),
+  );
+  check(
+    "paramless route uploads its own path as the pattern",
+    helloEntry?.routePattern === "/api/hello",
+    JSON.stringify(helloEntry?.routePattern),
+  );
+  check(
+    "404 on a paramless route still groups as an unknown endpoint",
+    missingEntry?.errorFingerprint?.key === "404:endpoint",
     JSON.stringify(missingEntry?.errorFingerprint),
   );
 } finally {

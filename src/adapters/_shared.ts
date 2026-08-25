@@ -149,8 +149,9 @@ export function buildDebugInjection(args: {
  * pattern: `GET /car/{id}` -> `get-car-id`. The server resolves it back to the
  * operation by matching the same scheme against its OpenAPI endpoints, so this
  * MUST stay in sync with `recoverySlug` in the app's `recovery` route. Empty /
- * unmatched route (e.g. Next, or a 404 on no route) -> `unknown`, which the
- * server renders as "not a documented endpoint".
+ * unmatched route (a 404 on no route, or an adapter with no router to read a
+ * pattern from) -> `unknown`, which the server renders as "not a documented
+ * endpoint".
  */
 export function recoverySlug(method?: string, path?: string): string {
   const m = (method || "").toLowerCase();
