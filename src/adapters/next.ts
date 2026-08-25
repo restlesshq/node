@@ -313,14 +313,13 @@ function nextWrapFactory(handle: SetupHandle) {
       const debug = buildDebugInjection({
         status: res.status,
         requestId: rawId,
-        baseUrl: opts.baseUrl,
         prefix: opts.requestIdPrefix,
         recovery,
         fingerprint: fingerprint?.key,
         strategy: fingerprint?.strategy,
         method: req.method,
         path: routePattern,
-        docsUrl: engine.docsUrl,
+        portalUrl: engine.portalUrl,
       });
 
       const modified = applyInternalBodyMods(

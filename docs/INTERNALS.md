@@ -276,13 +276,16 @@ Adapters compute the fingerprint once, pre-response, so the same value can be (a
   - `x-request-id`: set only if the incoming request didn't already have one. We don't stomp an existing request-id chain.
 - Incoming `x-request-id` values are **never reused** as our ID. We always mint a fresh one so the log lookup is unambiguous.
 
-On 4xx/5xx responses we also add:
+On **every** response we also add:
 
 - `x-log-url`: deep link to the captured log
 - `x-debug`: the `npx api debug <id>` CLI invocation
-- A `debug` object injected into JSON response bodies with the same links plus a hint
 
-The host the SDK uses for `x-log-url` is learned from the metrics server: every `/v1/request` upload response can include `docsUrl` (origin only, e.g. `https://docs.customer.com`), which the engine caches in-process and the adapters read when building the debug injection. When the project has a verified custom docs domain, the SDK uses that; otherwise it falls back to the configured primary host. There's a one-batch staleness window after a domain change — until the next upload round-trips, the SDK falls back to `RESTLESS_BASE_URL` for the link host. The format is otherwise unchanged.
+An agent that got a 200 it didn't expect has the same question as one that got a 500, and the header is the only place it can find the answer. On 4xx/5xx **only**, we additionally merge a `debug` object into JSON response bodies with the same links plus a recovery hint — a successful response body is the caller's data, not ours to reshape.
+
+Both URLs are built on the project's **portal origin**, learned from the server: every `/v1/request` upload response carries `docsUrl` (origin only, e.g. `https://docs.customer.com` or `https://<slug>.restlessdocs.com`), which the engine caches in-process and the adapters read when building the injection. The SDK never derives it.
+
+There is deliberately **no fallback**. `RESTLESS_BASE_URL` is an upload target: it serves the ingest API, so `<baseUrl>/logs/<id>` 404s. Until the first upload round-trips — a cold start, at most one batch — the SDK emits `x-debug` alone, with no `x-log-url`, no `debug` object and no dig-in line. A caller cannot tell a broken URL from a missing one, and one fetched 404 is enough to teach an agent to stop following the link at all. The same one-batch staleness window applies after a portal-origin change.
 
 ## Blocking
 

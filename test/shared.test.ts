@@ -7,14 +7,18 @@ import {
   isSetupHandle,
 } from "../src/adapters/_shared.js";
 
+const PORTAL = "https://acme.restlessdocs.com";
+
 describe("buildDebugInjection", () => {
-  it("returns empty headers / no mutator on 2xx", () => {
+  it("emits headers but no body mutator on 2xx", () => {
     const d = buildDebugInjection({
       status: 200,
       requestId: "abc",
-      baseUrl: "http://x",
+      portalUrl: PORTAL,
     });
-    expect(d.headers).toEqual({});
+    expect(d.headers["x-log-url"]).toBe(`${PORTAL}/logs/abc`);
+    expect(d.headers["x-debug"]).toBe("npx api debug abc");
+    // A successful response body is the caller's data, not ours to reshape.
     expect(d.mutateJsonBody).toBeUndefined();
   });
 
@@ -22,22 +26,37 @@ describe("buildDebugInjection", () => {
     const d = buildDebugInjection({
       status: 404,
       requestId: "abc",
-      baseUrl: "http://x",
+      portalUrl: PORTAL,
     });
-    expect(d.headers["x-log-url"]).toBe("http://x/logs/abc");
+    expect(d.headers["x-log-url"]).toBe(`${PORTAL}/logs/abc`);
     expect(d.headers["x-debug"]).toBe("npx api debug abc");
+  });
+
+  it("emits no URL at all when no portal origin is known", () => {
+    for (const status of [200, 404, 500]) {
+      const d = buildDebugInjection({
+        status,
+        requestId: "abc",
+        method: "GET",
+        path: "/car/{id}",
+      });
+      // `x-debug` carries no URL, so it survives.
+      expect(d.headers["x-debug"]).toBe("npx api debug abc");
+      expect(d.headers["x-log-url"]).toBeUndefined();
+      expect(d.mutateJsonBody).toBeUndefined();
+    }
   });
 
   it("injects debug into a JSON body on error", () => {
     const d = buildDebugInjection({
       status: 500,
       requestId: "abc",
-      baseUrl: "http://x",
+      portalUrl: PORTAL,
     });
     const mutated = d.mutateJsonBody!({ error: "boom" });
     expect(mutated).toMatchObject({
       error: "boom",
-      debug: { log: "http://x/logs/abc", cli: "npx api debug abc" },
+      debug: { log: `${PORTAL}/logs/abc`, cli: "npx api debug abc" },
     });
   });
 
@@ -45,7 +64,7 @@ describe("buildDebugInjection", () => {
     const d = buildDebugInjection({
       status: 500,
       requestId: "abc",
-      baseUrl: "http://x",
+      portalUrl: PORTAL,
     });
     expect(d.mutateJsonBody!("a string")).toBe("a string");
     expect(d.mutateJsonBody!([1, 2, 3])).toEqual([1, 2, 3]);
@@ -55,7 +74,7 @@ describe("buildDebugInjection", () => {
     const d = buildDebugInjection({
       status: 404,
       requestId: "req-abc-123",
-      baseUrl: "http://x",
+      portalUrl: PORTAL,
       fingerprint: "404:resource",
       strategy: "resource",
       method: "GET",
@@ -66,17 +85,37 @@ describe("buildDebugInjection", () => {
     };
     // `/p/<requestId>/<slug>.md` - the slug is the endpoint (reads as docs); the
     // first segment is the request id, for dashboard correlation.
-    const m = mutated.debug.recovery.match(/http:\/\/x\/p\/(\S+?)\/(\S+)\.md/);
+    const m = mutated.debug.recovery.match(
+      /https:\/\/acme\.restlessdocs\.com\/p\/(\S+?)\/(\S+)\.md/,
+    );
     expect(m).toBeTruthy();
     expect(m![1]).toBe("req-abc-123"); // the request id, for correlation
     expect(m![2]).toBe("get-car-id"); // legible slug from method+path
+  });
+
+  it("builds both URLs on the SAME portal origin", () => {
+    const d = buildDebugInjection({
+      status: 404,
+      requestId: "abc",
+      portalUrl: PORTAL,
+      method: "GET",
+      path: "/orders",
+    });
+    const mutated = d.mutateJsonBody!({ error: "boom" }) as {
+      debug: { log: string; recovery: string };
+    };
+    expect(mutated.debug.log.startsWith(PORTAL)).toBe(true);
+    expect(mutated.debug.recovery).toContain(`${PORTAL}/p/abc/get-orders.md`);
+    // The ingest origin is an upload target and never a log-URL host.
+    const serialized = JSON.stringify({ ...d.headers, ...mutated.debug });
+    expect(serialized).not.toContain("ingress.restless.ai");
   });
 
   it("uses the `unknown` slug when there's no matched route", () => {
     const d = buildDebugInjection({
       status: 404,
       requestId: "abc",
-      baseUrl: "http://x",
+      portalUrl: PORTAL,
       method: "GET",
       // no path (unmatched route / Next)
     });
@@ -90,7 +129,7 @@ describe("buildDebugInjection", () => {
     const d = buildDebugInjection({
       status: 400,
       requestId: "abc",
-      baseUrl: "http://x",
+      portalUrl: PORTAL,
       recovery: "Use a valid status.",
       method: "GET",
       path: "/orders",

@@ -53,6 +53,22 @@ function bodyCollector() {
   return { uploads, fetchImpl: fetchImpl as unknown as typeof fetch };
 }
 
+/** Upload responses that publish a portal origin, the way the server does. */
+function portalFetch() {
+  return (async () => ({
+    ok: true,
+    json: async () => ({ ingested: 1, docsUrl: "https://acme.restlessdocs.com" }),
+    text: async () => "",
+  })) as unknown as typeof fetch;
+}
+
+/** One throwaway request so the engine round-trips a batch and caches it. */
+async function warmPortalOrigin(mw: any) {
+  await run(mw, (_req, res) => res.end("{}"), { method: "GET", path: "/warm" });
+  await new Promise((r) => setTimeout(r, 0));
+  await new Promise((r) => setTimeout(r, 0));
+}
+
 describe("express adapter (one-liner)", () => {
   beforeEach(() => _resetSettingsCache());
   it("returns a client whose setup() gives middleware directly", async () => {
@@ -157,12 +173,13 @@ describe("express adapter (one-liner)", () => {
   it("injects debug info on 4xx JSON responses", async () => {
     const restless = restlessExpress("rdme_test", {
       baseUrl: "http://localhost:3003",
-      fetch: (async () => ({
-        ok: true,
-        text: async () => "",
-      })) as unknown as typeof fetch,
+      fetch: portalFetch(),
     });
     const mw = restless.setup(() => ({}));
+
+    // The portal origin is learned from an upload RESPONSE, so the first
+    // request through a fresh process can't have one yet.
+    await warmPortalOrigin(mw);
 
     const result = await run(
       mw,
@@ -174,7 +191,11 @@ describe("express adapter (one-liner)", () => {
       { method: "GET", path: "/missing" },
     );
     expect(result.status).toBe(404);
-    expect(result.headers["x-log-url"]).toMatch(/\/logs\//);
+    expect(result.headers["x-log-url"]).toMatch(
+      /^https:\/\/acme\.restlessdocs\.com\/logs\//,
+    );
+    // The ingest origin is an upload target, never a log-URL host.
+    expect(result.headers["x-log-url"]).not.toContain("localhost:3003");
     expect(result.headers["x-debug"]).toMatch(/npx api debug/);
     const parsed = JSON.parse(result.body);
     expect(parsed.debug).toBeDefined();
@@ -183,15 +204,13 @@ describe("express adapter (one-liner)", () => {
     expect(parsed.error).toBe("not found");
   });
 
-  it("does NOT touch 2xx responses", async () => {
+  it("headers a 2xx but does NOT touch its body", async () => {
     const restless = restlessExpress("rdme_test", {
       baseUrl: "http://localhost:3003",
-      fetch: (async () => ({
-        ok: true,
-        text: async () => "",
-      })) as unknown as typeof fetch,
+      fetch: portalFetch(),
     });
     const mw = restless.setup(() => ({}));
+    await warmPortalOrigin(mw);
 
     const result = await run(
       mw,
@@ -202,7 +221,14 @@ describe("express adapter (one-liner)", () => {
       { method: "GET", path: "/" },
     );
     expect(result.status).toBe(200);
-    expect(result.headers["x-log-url"]).toBeUndefined();
+    // An agent that got an unexpected 200 has the same question as one that
+    // got a 500, so the headers go out either way.
+    expect(result.headers["x-log-url"]).toMatch(
+      /^https:\/\/acme\.restlessdocs\.com\/logs\//,
+    );
+    expect(result.headers["x-debug"]).toMatch(/npx api debug/);
+    // The body is the caller's data. Untouched.
+    expect(JSON.parse(result.body)).toEqual({ hello: "world" });
     expect(JSON.parse(result.body)).toEqual({ hello: "world" });
   });
 

@@ -12,7 +12,7 @@
  * Not to be confused with `__SDK_VERSION__` (the npm package version, baked
  * in at build time from package.json and shipped as the HAR `creator`).
  */
-export const SPEC_VERSION = "1.0.0";
+export const SPEC_VERSION = "1.0.1";
 
 /** Conformance level this SDK claims. L2 = core plus sections 8-13. */
 export const CONFORMANCE_LEVEL = "L2";

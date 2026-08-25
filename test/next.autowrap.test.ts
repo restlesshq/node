@@ -16,9 +16,28 @@ import restlessNext, {
 function mkFetch() {
   return vi.fn().mockResolvedValue({
     ok: true,
-    json: async () => ({ ingested: 1 }),
+    // The portal origin the SDK builds every injected URL from. Published by
+    // the server on the upload response; the SDK never derives it.
+    json: async () => ({ ingested: 1, docsUrl: PORTAL }),
     text: async () => "",
   });
+}
+
+const PORTAL = "https://acme.restlessdocs.com";
+
+/** One throwaway request so the engine round-trips a batch and caches it. */
+async function warmPortalOrigin(
+  config: RestlessNextConfig,
+  fetchImpl: ReturnType<typeof mkFetch>,
+) {
+  const warm = wrapRouteHandler(async () => Response.json({ ok: true }), config);
+  await warm(new Request("http://localhost/api/warm"));
+  await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalled());
+  await new Promise((r) => setTimeout(r, 0));
+  await new Promise((r) => setTimeout(r, 0));
+  // Leave the upload log clean so `uploadedPayload` still reads the caller's
+  // own request rather than this warm-up.
+  fetchImpl.mockClear();
 }
 
 function mkConfig(overrides: Partial<RestlessNextConfig> = {}) {
@@ -250,7 +269,8 @@ describe("body-capture guards", () => {
   });
 
   it("drops a handler-set content-length when the debug injection grows the body", async () => {
-    const { config } = mkConfig();
+    const { config, fetchImpl } = mkConfig();
+    await warmPortalOrigin(config, fetchImpl);
     const body = JSON.stringify({ error: "nope" });
     const GET = wrapRouteHandler(
       async () =>
@@ -328,7 +348,8 @@ describe("owner enrichment through wrapRouteHandler", () => {
 
 describe("error debug injection still applies through wrapRouteHandler", () => {
   it("injects debug block + x-log-url on 4xx JSON responses", async () => {
-    const { config } = mkConfig();
+    const { config, fetchImpl } = mkConfig();
+    await warmPortalOrigin(config, fetchImpl);
     const GET = wrapRouteHandler(
       async () =>
         Response.json({ error: "nope" }, { status: 404 }),
@@ -336,11 +357,40 @@ describe("error debug injection still applies through wrapRouteHandler", () => {
     );
     const res = await GET(new Request("http://localhost/api/missing"));
     expect(res.status).toBe(404);
-    expect(res.headers.get("x-log-url")).toContain("/logs/");
+    expect(res.headers.get("x-log-url")).toContain(`${PORTAL}/logs/`);
     const body = await res.json();
     expect(body.error).toBe("nope");
-    expect(body.debug.log).toContain("/logs/");
-    expect(body.debug.recovery).toContain("fetch ");
+    expect(body.debug.log).toContain(`${PORTAL}/logs/`);
+    expect(body.debug.recovery).toContain(`${PORTAL}/p/`);
+  });
+
+  it("headers a 2xx without touching its body", async () => {
+    const { config, fetchImpl } = mkConfig();
+    await warmPortalOrigin(config, fetchImpl);
+    const GET = wrapRouteHandler(
+      async () => Response.json({ hello: "world" }),
+      config,
+    );
+    const res = await GET(new Request("http://localhost/api/ok"));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("x-log-url")).toContain(`${PORTAL}/logs/`);
+    expect(res.headers.get("x-debug")).toContain("npx api debug");
+    expect(await res.json()).toEqual({ hello: "world" });
+  });
+
+  it("emits no log URL before the first upload round-trip", async () => {
+    const { config } = mkConfig();
+    const GET = wrapRouteHandler(
+      async () => Response.json({ error: "nope" }, { status: 404 }),
+      config,
+    );
+    const res = await GET(new Request("http://localhost/api/missing"));
+    // Better a missing line than one that 404s: an agent can't tell them
+    // apart, and a dead fetch costs it the whole convention.
+    expect(res.headers.get("x-log-url")).toBeNull();
+    expect(res.headers.get("x-debug")).toContain("npx api debug");
+    const body = await res.json();
+    expect(body.debug).toBeUndefined();
   });
 });
 
@@ -439,6 +489,9 @@ describe("route pattern recovery from context.params", () => {
 
   it("groups a 404 on a parameterized route as a missing RESOURCE", async () => {
     const { config, fetchImpl } = mkConfig();
+    // The dig-in URL only exists once a portal origin has been published, so
+    // round-trip a batch first (INJECT-006).
+    await warmPortalOrigin(config, fetchImpl);
     const GET = wrapRouteHandler(
       async () => Response.json({ error: "no such pet" }, { status: 404 }),
       config,

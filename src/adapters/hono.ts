@@ -126,14 +126,13 @@ function honoMiddleware(handle: SetupHandle) {
     const debug = buildDebugInjection({
       status: res.status,
       requestId: rawId,
-      baseUrl: opts.baseUrl,
       prefix: opts.requestIdPrefix,
       recovery,
       fingerprint: fingerprint?.key,
       strategy: fingerprint?.strategy,
       method: req.method,
       path: c.req.routePath,
-      docsUrl: engine.docsUrl,
+      portalUrl: engine.portalUrl,
     });
     for (const [k, v] of Object.entries(debug.headers)) c.header(k, v);
 

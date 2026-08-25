@@ -36,6 +36,7 @@ import {
   stripRequestIdPrefix,
 } from "../src/lib/requestId.js";
 import {
+  buildDebugInjection,
   recoverySlug,
   requestIdResponseHeaders,
 } from "../src/adapters/_shared.js";
@@ -78,6 +79,25 @@ export const OPS: Record<string, (input: Input) => unknown> = {
   // FP-042 is shared across every SDK even though frame PARSING is not
   // (FP-044/FP-046), so path normalization gets its own dialect-free op.
   projectRelative: (i) => projectRelative(i.file),
+
+  // --- injection ---
+  // Returns the observable surface only: the headers, and the `debug` object
+  // the mutator would merge (null when there is no mutator).
+  debugInjection: (i) => {
+    const d = buildDebugInjection({
+      status: i.status,
+      requestId: i.requestId,
+      prefix: j(i.prefix) ?? undefined,
+      recovery: j(i.recovery) ?? undefined,
+      method: j(i.method) ?? undefined,
+      path: j(i.path) ?? undefined,
+      portalUrl: j(i.portalUrl) ?? undefined,
+    });
+    const mutated = d.mutateJsonBody
+      ? (d.mutateJsonBody({}) as { debug?: unknown })
+      : undefined;
+    return { headers: d.headers, debug: j(mutated?.debug) };
+  },
 
   // --- request ids ---
   formatRequestId: (i) => formatRequestId(i.rawId, j(i.prefix) ?? undefined),

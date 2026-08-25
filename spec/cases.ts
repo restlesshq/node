@@ -477,6 +477,44 @@ export const RECOVERY_SLUG_CASES: CaseDef[] = [
 ];
 
 // ---------------------------------------------------------------------------
+// debug injection
+// ---------------------------------------------------------------------------
+
+const PORTAL = "https://acme.restlessdocs.com";
+const INJECT_ID = "9f18a0e2-1c3d-4b5a-8e7f-0a1b2c3d4e5f";
+
+export const INJECTION_CASES: CaseDef[] = [
+  { id: "inject/2xx-headers-only", requirement: "INJECT-001", op: "debugInjection",
+    input: { status: 200, requestId: INJECT_ID, portalUrl: PORTAL, method: "GET", path: "/car/{id}" },
+    note: "Headers on every status; the body object stays 4xx/5xx only." },
+  { id: "inject/2xx-301", requirement: "INJECT-001", op: "debugInjection",
+    input: { status: 301, requestId: INJECT_ID, portalUrl: PORTAL } },
+  { id: "inject/4xx-full", requirement: "INJECT-002", op: "debugInjection",
+    input: { status: 404, requestId: INJECT_ID, portalUrl: PORTAL, method: "GET", path: "/car/{id}" },
+    note: "Both URLs share the portal origin." },
+  { id: "inject/5xx-full", requirement: "INJECT-002", op: "debugInjection",
+    input: { status: 500, requestId: INJECT_ID, portalUrl: PORTAL, method: "POST", path: "/orders" } },
+  { id: "inject/no-portal-2xx", requirement: "INJECT-006", op: "debugInjection",
+    input: { status: 200, requestId: INJECT_ID },
+    note: "No portal origin: x-debug only, and never a URL on the ingest host." },
+  { id: "inject/no-portal-4xx", requirement: "INJECT-006", op: "debugInjection",
+    input: { status: 404, requestId: INJECT_ID, method: "GET", path: "/car/{id}" },
+    note: "No portal origin means no debug object at all, so no dig-in line." },
+  { id: "inject/prefix", requirement: "INJECT-002", op: "debugInjection",
+    input: { status: 404, requestId: INJECT_ID, prefix: "TST", portalUrl: PORTAL },
+    note: "x-log-url carries the RAW id; only the CLI hint is prefixed." },
+  { id: "inject/authored-recovery", requirement: "INJECT-004", op: "debugInjection",
+    input: { status: 402, requestId: INJECT_ID, portalUrl: PORTAL, recovery: "Try another card.",
+      method: "POST", path: "/charge" },
+    note: "The authored hint precedes the dig-in line, separated by a blank line." },
+  { id: "inject/unknown-slug", requirement: "INJECT-005", op: "debugInjection",
+    input: { status: 404, requestId: INJECT_ID, portalUrl: PORTAL, method: "GET" } },
+  { id: "inject/trailing-slash-origin", requirement: "WIRE-023", op: "debugInjection",
+    input: { status: 404, requestId: INJECT_ID, portalUrl: PORTAL, method: "GET", path: "/x" },
+    note: "The origin is stripped of trailing slashes on ingest (WIRE-023), so the SDK appends directly." },
+];
+
+// ---------------------------------------------------------------------------
 // HAR
 // ---------------------------------------------------------------------------
 
@@ -533,5 +571,6 @@ export const ALL_FILES: Array<{ file: string; cases: CaseDef[] }> = [
   { file: "fingerprint.json", cases: FINGERPRINT_CASES },
   { file: "request-id.json", cases: REQUEST_ID_CASES },
   { file: "recovery-slug.json", cases: RECOVERY_SLUG_CASES },
+  { file: "debug-injection.json", cases: INJECTION_CASES },
   { file: "har.json", cases: HAR_CASES },
 ];
