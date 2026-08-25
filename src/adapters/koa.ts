@@ -121,14 +121,13 @@ function koaMiddleware(handle: SetupHandle) {
     const debug = buildDebugInjection({
       status: ctx.status,
       requestId: rawId,
-      baseUrl: opts.baseUrl,
       prefix: opts.requestIdPrefix,
       recovery,
       fingerprint: fingerprint?.key,
       strategy: fingerprint?.strategy,
       method: ctx.method,
       path: routePattern,
-      docsUrl: engine.docsUrl,
+      portalUrl: engine.portalUrl,
     });
     for (const [k, v] of Object.entries(debug.headers)) ctx.set(k, v);
 

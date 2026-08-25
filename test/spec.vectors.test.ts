@@ -22,7 +22,7 @@ import { SPEC_VERSION } from "../src/lib/version.js";
  */
 
 /** The version the generator stamps into every vector file. */
-const SPEC_VERSION_IN_VECTORS = "1.0.0";
+const SPEC_VERSION_IN_VECTORS = "1.0.1";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const VECTOR_DIR = join(HERE, "..", "spec", "vectors");
 const UPDATE = process.env.UPDATE_VECTORS === "1";

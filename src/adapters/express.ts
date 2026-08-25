@@ -220,18 +220,17 @@ function expressMiddleware(handle: SetupHandle) {
         stackTrace,
       });
 
-      // Internal debug injection on 4xx/5xx JSON
+      // Debug headers on every status; the `debug` body object on 4xx/5xx.
       const debug = buildDebugInjection({
         status: res.statusCode,
         requestId: rawId,
-        baseUrl: opts.baseUrl,
         prefix: opts.requestIdPrefix,
         recovery,
         fingerprint: fingerprint?.key,
         strategy: fingerprint?.strategy,
         method: req.method || "GET",
         path: routePattern,
-        docsUrl: engine.docsUrl,
+        portalUrl: engine.portalUrl,
       });
       for (const [k, v] of Object.entries(debug.headers)) res.setHeader(k, v);
 

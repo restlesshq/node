@@ -165,14 +165,13 @@ async function restlessFastifyPlugin(fastify: any, handle: SetupHandle) {
     const debug = buildDebugInjection({
       status: reply.statusCode,
       requestId: state.rawId,
-      baseUrl: opts.baseUrl,
       prefix: opts.requestIdPrefix,
       recovery,
       fingerprint: fingerprint?.key,
       strategy: fingerprint?.strategy,
       method: req.raw.method || "GET",
       path: routePattern,
-      docsUrl: engine.docsUrl,
+      portalUrl: engine.portalUrl,
     });
     for (const [k, v] of Object.entries(debug.headers)) reply.header(k, v);
 

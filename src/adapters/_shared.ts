@@ -59,22 +59,19 @@ export function requestIdResponseHeaders(
   return { [headerName]: value };
 }
 
-/**
- * Inject SDK-owned debug info into a response body. Only runs when the
- * status is >= 400 AND the body is JSON.
- *
- * On errors we also add `x-log-url` and `x-debug` response headers —
- * returned from this helper so the adapter can set them.
- *
- * `recovery`, when present, is a customer-authored "next steps" message
- * attached to this error's fingerprint via Agent Recovery (/errors).
- * It's looked up sync from the SDK's in-process cache; the lookup never
- * waits on the network.
- */
+/** Debug response headers, plus the `debug` body object on a 4xx/5xx. */
+
+// Headers go out on EVERY status: an agent that got an unexpected 200 has the
+// same question as one that got a 500, and the header is its only answer.
+
+// The body injection stays 4xx/5xx - a successful response body is the
+// caller's data, not ours to reshape.
+
+// `recovery` is a customer-authored next-steps message attached to this
+// error's fingerprint, read from the in-process cache, never the network.
 export function buildDebugInjection(args: {
   status: number;
   requestId: string;
-  baseUrl: string;
   prefix?: string;
   recovery?: string;
   /** Error fingerprint key (e.g. "404:resource") + strategy, and the
@@ -84,39 +81,40 @@ export function buildDebugInjection(args: {
   strategy?: string;
   method?: string;
   path?: string;
-  /**
-   * Origin to use for the customer-facing log link, learned from the
-   * metrics server's response to a prior upload. Origin only
-   * (`https://docs.customer.com`); the helper appends `/logs/<id>`.
-   *
-   * Falls back to `baseUrl` when the SDK hasn't round-tripped a
-   * batch yet (cold start) or the server doesn't yet return the
-   * field. The result is still well-formed, just not customer-branded
-   * until the next batch refreshes the cache.
-   */
-  docsUrl?: string;
+
+  /** The project's public portal origin, from a prior upload response. */
+
+  // Origin only; we append `/logs/<id>` and `/p/<id>/<slug>.md`. NOT the
+  // ingest base URL, which serves `/v1/*` and 404s both paths.
+
+  // Absent until the first batch round-trip. Emit nothing then: an agent
+  // can't tell a broken URL from a missing one, and a 404 costs it the line.
+  portalUrl?: string;
 }): {
   headers: Record<string, string>;
   mutateJsonBody?: (body: unknown) => unknown;
 } {
-  if (args.status < 400) return { headers: {} };
-
   const display = formatRequestId(args.requestId, args.prefix);
-  const logHost = args.docsUrl || args.baseUrl;
-  const logUrl = `${logHost}/logs/${args.requestId}`;
   const debugCmd = `npx api debug ${display}`;
 
-  // Per-request "dig-in" URL the calling agent (often an AI) can fetch for
-  // concrete next steps. Deliberately LEGIBLE - it ends in `<slug>.md` (the
-  // endpoint the agent called) so it reads as documentation, not a tracking
-  // blob (an opaque token in the tail kills trust / fetch-through). The first
-  // segment is the request id - the SAME public id already in `debug.log` - so
-  // the dashboard can correlate the follow-up back to this request (did the
-  // agent then recover?) without any new tracking token. It grants no access:
-  // content is resolved from the slug + public OAS. Appended INTO `recovery` so
-  // the agent treats it as a next step, on every error.
+  // `x-debug` carries no URL, so it survives a missing portal origin.
+  if (!args.portalUrl) return { headers: { "x-debug": debugCmd } };
+
+  const logUrl = `${args.portalUrl}/logs/${args.requestId}`;
+  if (args.status < 400) {
+    return { headers: { "x-log-url": logUrl, "x-debug": debugCmd } };
+  }
+
+  // Per-request "dig-in" URL the calling agent fetches for concrete next
+  // steps. Appended INTO `recovery` so it reads as a next step.
+
+  // Deliberately LEGIBLE: it ends in `<slug>.md`, the endpoint they called, so
+  // it reads as documentation. An opaque tail kills trust and fetch-through.
+
+  // The first segment is the request id already in `debug.log`, so the
+  // dashboard correlates the follow-up without a second tracking token.
   const slug = recoverySlug(args.method, args.path);
-  const digInUrl = `${logHost}/p/${args.requestId}/${slug}.md`;
+  const digInUrl = `${args.portalUrl}/p/${args.requestId}/${slug}.md`;
   const digInLine = `For the accepted parameters and next steps, fetch ${digInUrl}`;
   const recovery = args.recovery
     ? `${args.recovery}\n\n${digInLine}`

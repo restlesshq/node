@@ -206,7 +206,6 @@ function nextWrapFactory(handle: SetupHandle) {
       const debug = buildDebugInjection({
         status: res.status,
         requestId: rawId,
-        baseUrl: opts.baseUrl,
         prefix: opts.requestIdPrefix,
         recovery,
         fingerprint: fingerprint?.key,
@@ -214,7 +213,7 @@ function nextWrapFactory(handle: SetupHandle) {
         method: req.method,
         // Next doesn't expose a matched route pattern; 404s here fall into the
         // `endpoint` bucket and the dig-in lists available endpoints.
-        docsUrl: engine.docsUrl,
+        portalUrl: engine.portalUrl,
       });
 
       const modified = applyInternalBodyMods(

@@ -1,6 +1,6 @@
 # Restless SDK Contract
 
-**Spec version:** 1.0.0
+**Spec version:** 1.0.1
 **Status:** Draft
 **Reference implementation:** `@restlessai/sdk` (this repository)
 
@@ -917,8 +917,12 @@ cache entry for each listed key (CACHE-006).
 **WIRE-022** (MUST) `recoveryMessages: {[fingerprintKey]: string}` populates
 the recovery cache (CACHE-011).
 
-**WIRE-023** (MUST) `docsUrl: string` is cached in-process as the origin
-for injected log links, with any trailing slashes stripped (INJECT-006).
+**WIRE-023** (MUST) `docsUrl: string` is the project's public **portal
+origin**, cached in-process as the origin for every injected URL, with any
+trailing slashes stripped (INJECT-006). The server sends it on every
+response, for every project; it is not a custom-domain override. The wire
+field keeps the name `docsUrl` for compatibility with already-deployed
+SDKs.
 
 **WIRE-024** (MUST) An unsuccessful upload (non-2xx) MUST NOT be retried
 and MUST NOT raise. The batch is dropped.
@@ -963,26 +967,31 @@ ingest. Detection is per-language (section 14).
 
 Level 2. What the SDK adds to the customer's own responses.
 
-**INJECT-001** (MUST) Injection applies only when `status >= 400`.
+**INJECT-001** (MUST) The response headers (INJECT-002) are set on EVERY
+status. The `debug` body object (INJECT-003) is merged only when
+`status >= 400`.
 
-**INJECT-002** (MUST) On a 4xx/5xx, these response headers are set:
+**INJECT-002** (MUST) These response headers are set on every status:
 
-- `x-log-url`: `<logHost>/logs/<rawRequestId>`
-- `x-debug`: `npx api debug <displayRequestId>`
+- `x-log-url`: `<portalOrigin>/logs/<rawRequestId>`, OMITTED when no portal
+  origin has been learned (INJECT-006)
+- `x-debug`: `npx api debug <displayRequestId>`, always set (it carries no
+  URL, so nothing can make it unresolvable)
 
 **INJECT-003** (MUST) A `debug` object is merged into the response body
 ONLY when the body is a JSON object (not an array, not a scalar) and the
 `content-type` contains `application/json`. Its fields are `log`, `cli`,
 and `recovery`.
 
-**INJECT-004** (MUST) `debug.recovery` always contains the dig-in line:
+**INJECT-004** (MUST) `debug.recovery` contains the dig-in line:
 
 ```
-For the accepted parameters and next steps, fetch <logHost>/p/<rawRequestId>/<slug>.md
+For the accepted parameters and next steps, fetch <portalOrigin>/p/<rawRequestId>/<slug>.md
 ```
 
 When a cached recovery message exists for this fingerprint, it precedes the
-dig-in line separated by a blank line.
+dig-in line separated by a blank line. With no portal origin there is no
+`debug` object at all (INJECT-006), so the line cannot appear without one.
 
 **INJECT-005** (MUST) The dig-in slug is derived from method and route
 pattern: lowercase the method; replace runs of `/`, `{`, `}`, `:` in the
@@ -990,10 +999,19 @@ path with `-`; remove every character not in `[A-Za-z0-9-]`; collapse runs
 of `-`; strip leading and trailing `-`; join as `<method>-<flat>`. An empty
 method or path yields the literal `unknown`.
 
-**INJECT-006** (MUST) `<logHost>` is the server-supplied `docsUrl`
-(WIRE-023) when one has been learned, else the configured base URL. There
-is a one-batch staleness window after a docs-domain change; that is
-accepted.
+**INJECT-006** (MUST) `<portalOrigin>` is the server-supplied `docsUrl`
+(WIRE-023), and there is NO fallback. The configured base URL is an upload
+target and MUST NOT be used to build a log URL: it serves the ingest API
+only, so every such URL 404s.
+
+When no portal origin has been learned - a process that has not yet
+round-tripped a batch - the SDK MUST emit `x-debug` alone: no `x-log-url`,
+no `debug` object, no dig-in line. Emitting nothing is required rather than
+merely allowed, because a caller cannot distinguish a broken URL from a
+missing one, and one fetched 404 costs the convention its credibility.
+
+There is a one-batch cold-start window, and a one-batch staleness window
+after a portal-origin change; both are accepted.
 
 **INJECT-007** (MUST) The slug scheme MUST stay in sync with the app's
 `recoverySlug`. It is resolved back to an OpenAPI operation server-side.
@@ -1238,7 +1256,13 @@ large corpus, and the diff SHOULD be zero or explicitly accounted for. A
 moved fingerprint key silently orphans the Agent Recovery message attached
 to it, which is a failure nobody notices for weeks.
 
-**CHANGE-005** (MUST) Versioning is semver over the *contract*: a patch
-clarifies without changing behaviour, a minor adds requirements that
-existing conformant SDKs still satisfy, a major changes or removes a
-requirement.
+**CHANGE-005** (MUST) Versioning is semver over the *consumer surface*: the
+API an SDK's users program against, and the wire format its peers depend
+on. A patch leaves that surface alone (including a bug fix that changes
+observable behaviour, where the old behaviour was the bug), a minor adds
+requirements that existing conformant SDKs still satisfy, a major changes
+or removes something a consumer or a peer could be relying on.
+
+`1.0.1` is the worked example: it changed which host the SDK injects and
+lifted the status gate on two headers, which is observable, but no SDK
+option, no method signature and no wire field moved.

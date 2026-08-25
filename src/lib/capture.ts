@@ -44,20 +44,12 @@ export class CaptureEngine {
   readonly recoveryCache: RecoveryCache;
   private callback: SetupCallback | null = null;
   private redactOpts: RedactOptions;
-  /**
-   * Origin (scheme + host, no trailing slash) the SDK should use when
-   * constructing log-view links injected into 4xx/5xx responses.
-   * Learned from the server's `/v1/request` response — the metrics
-   * server resolves the project's verified custom domain (or the
-   * primary host as fallback) and tells us, so the SDK doesn't need
-   * to know the customer's docs hostname out of band.
-   *
-   * Undefined until the first batch round-trips. Until then,
-   * `_shared.ts:buildDebugInjection` falls back to `baseUrl` — the
-   * URL is still well-formed, it just isn't customer-branded yet.
-   * One cold-start staleness window after a docs-domain change.
-   */
-  private cachedDocsUrl: string | undefined;
+  // The project's public portal origin (scheme + host, no trailing slash),
+  // learned from the server's `/v1/request` response. Never derived here.
+
+  // Undefined until the first batch round-trips, and the injection then emits
+  // no URL at all: there is no fallback, by design. One cold-start window.
+  private cachedPortalUrl: string | undefined;
 
   constructor(cfg: EngineConfig) {
     this.blocklist = new Blocklist();
@@ -75,12 +67,9 @@ export class CaptureEngine {
     this.callback = cb;
   }
 
-  /** Latest server-resolved docs URL origin, or `undefined` if we
-   *  haven't seen a response yet. Adapters read this when assembling
-   *  the debug injection so the URL we surface tracks the customer's
-   *  custom-domain config. */
-  get docsUrl(): string | undefined {
-    return this.cachedDocsUrl;
+  /** Server-published portal origin, or `undefined` before the first upload. */
+  get portalUrl(): string | undefined {
+    return this.cachedPortalUrl;
   }
 
   /**
@@ -112,12 +101,13 @@ export class CaptureEngine {
       }
     }
 
-    // Server-driven docs URL — origin only (e.g. `https://docs.customer.com`),
-    // no trailing slash. The SDK appends `/logs/<requestId>` when building
-    // injected debug links. Strips any trailing slash defensively so the
-    // server can be lax about what it sends.
+    // The wire key stays `docsUrl`: every already-deployed SDK reads it, and
+    // renaming it would strand them all with no portal origin at all.
+
+    // Origin only. Trailing slash stripped defensively so the server can be
+    // lax about what it sends and we never build a `//logs/<id>`.
     if (typeof obj.docsUrl === "string" && obj.docsUrl) {
-      this.cachedDocsUrl = obj.docsUrl.replace(/\/+$/, "");
+      this.cachedPortalUrl = obj.docsUrl.replace(/\/+$/, "");
     }
 
     const messages =
