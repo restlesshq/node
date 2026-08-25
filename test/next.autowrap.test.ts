@@ -404,6 +404,20 @@ describe("route pattern recovery from context.params", () => {
     ).toBe("/api/{org}/pets/{id}");
   });
 
+  // Known limitation, pinned rather than fixed: params carry no position, so
+  // a value equal to another literal segment in the same path is ambiguous
+  // and no runtime rule resolves it. Leftmost wins.
+  it("templates the leftmost match when a value collides with a literal", () => {
+    // Truth is `/api/pets/{id}` (route app/api/pets/[id], a pet id "pets").
+    expect(routePatternFromParams("/api/pets/pets", { id: "pets" })).toBe(
+      "/api/{id}/pets",
+    );
+    // The mirror case leftmost gets right: a value equal to a LATER literal.
+    expect(
+      routePatternFromParams("/api/pets/photos/photos", { id: "photos" }),
+    ).toBe("/api/pets/{id}/photos");
+  });
+
   it("does not template a literal segment that merely looks like an id", () => {
     // `42` is the org id here; the trailing `42` is part of the route.
     expect(routePatternFromParams("/api/42/42", { org: "42" })).toBe(

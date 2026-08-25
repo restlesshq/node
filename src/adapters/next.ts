@@ -91,8 +91,8 @@ export function routePatternFromParams(
   const out: string[] = [];
 
   for (let i = 0; i < segments.length; ) {
-    // Params arrive in route order and each is consumed once, so two params
-    // carrying the same value still template left to right.
+    // Leftmost match wins, and each param is consumed once. Ambiguous when a
+    // value equals another literal segment: see docs/INTERNALS.md.
     const hit = pending.findIndex(([, value]) =>
       Array.isArray(value)
         ? i + value.length <= segments.length &&
