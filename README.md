@@ -9,19 +9,13 @@ Run in your codebase to get started:
 npx restless init
 ```
 
+This scans your project, figures out your framework, generates an OpenAPI spec, automatically wires the SDK into your server.
+
 # @restlessai/sdk
 
 Capture your API traffic and send it to [Restless](https://restless.ai).
 
 Supports **Express**, **Fastify**, **Koa**, **Hono**, **Next.js**, and bare Node `http`. Runs on Node 18+, Bun, and Deno.
-
-## Install
-
-```sh
-npx restless init
-```
-
-This scans your project, figures out your framework, generates an OpenAPI spec, wires the SDK into your server, and flags your custom auth fields for redaction.
 
 ## Manual installation
 
@@ -60,14 +54,14 @@ app.use(restless.setup((req) => ({
 
 Here's how to set it up for your framework:
 
-| framework | registration                                                          |
-|-----------|-----------------------------------------------------------------------|
-| Express   | `app.use(restless.setup(cb))` + `app.use(restless.errorHandler)` last |
-| Fastify   | `await fastify.register(restless.setup(cb))`                          |
-| Koa       | `app.use(restless.setup(cb))`                                         |
-| Hono      | `app.use(restless.setup(cb))`                                         |
+| framework | registration                                                             |
+| --------- | ------------------------------------------------------------------------ |
+| Express   | `app.use(restless.setup(cb))` + `app.use(restless.errorHandler)` last    |
+| Fastify   | `await fastify.register(restless.setup(cb))`                             |
+| Koa       | `app.use(restless.setup(cb))`                                            |
+| Hono      | `app.use(restless.setup(cb))`                                            |
 | Next.js   | `withRestless(nextConfig)` + `restless.config.ts` — no per-route changes |
-| http      | `http.createServer(restless.setup(cb)(myHandler))`                    |
+| http      | `http.createServer(restless.setup(cb)(myHandler))`                       |
 
 Full per-framework examples are in [`install.md`](./install.md).
 
@@ -81,20 +75,21 @@ Full per-framework examples are in [`install.md`](./install.md).
 
   ```js
   app.use(restless.setup(cb));
-  app.use('/api', routes);
-  app.use(restless.errorHandler);   // ← after your routes
+  app.use("/api", routes);
+  app.use(restless.errorHandler); // ← after your routes
   ```
 
   Every other framework wires itself up. Without it, an Express crash still logs, it just groups by the text of your error response instead of by throw site.
+
 - **Blocking.** Return `{ block: true }` from the setup callback to reject a request with a 403 before your handler runs. Blocked requests skip `enrich` entirely, so a banned tenant costs you no database lookups.
 
 ## Environment variables
 
-| variable             | purpose                                                     |
-|----------------------|-------------------------------------------------------------|
-| `RESTLESS_KEY`       | Your project API key. Used if you don't pass one explicitly. Auto-loaded from `.env` (walking up from `cwd`) if not already set. |
-| `RESTLESS_BASE_URL`  | Override the metrics server URL (self-hosted / staging). `restless(key, { baseUrl })` takes precedence over it. |
-| `DEBUG=restless`     | Print upload diagnostics to stderr.                         |
+| variable            | purpose                                                                                                                          |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `RESTLESS_KEY`      | Your project API key. Used if you don't pass one explicitly. Auto-loaded from `.env` (walking up from `cwd`) if not already set. |
+| `RESTLESS_BASE_URL` | Override the metrics server URL (self-hosted / staging). `restless(key, { baseUrl })` takes precedence over it.                  |
+| `DEBUG=restless`    | Print upload diagnostics to stderr.                                                                                              |
 
 ## Docs
 
@@ -103,4 +98,5 @@ Full per-framework examples are in [`install.md`](./install.md).
 - **[spec/](./spec/)**: the cross-language SDK contract. This package is the reference implementation for every Restless SDK; `spec/` holds the normative spec, generated conformance vectors, and a harness that runs them against an implementation in any language.
 
 ## License
+
 MIT
