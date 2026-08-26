@@ -1,3 +1,14 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/restless-init-dark.svg">
+  <img width="880" src="docs/restless-init.svg" alt="Restless">
+</picture>
+
+Run in your codebase to get started:
+
+```sh
+npx restless init
+```
+
 # @restlessai/sdk
 
 Capture your API traffic and send it to [Restless](https://restless.ai).
@@ -7,7 +18,7 @@ Supports **Express**, **Fastify**, **Koa**, **Hono**, **Next.js**, and bare Node
 ## Install
 
 ```sh
-npx api setup
+npx restless init
 ```
 
 This scans your project, figures out your framework, generates an OpenAPI spec, wires the SDK into your server, and flags your custom auth fields for redaction.
@@ -64,7 +75,7 @@ Full per-framework examples are in [`install.md`](./install.md).
 
 - **One line of setup.** The factory returns a client; `setup(cb)` gives you framework-ready middleware back.
 - **Lazy owner enrichment.** Expensive DB lookups for owner metadata (display name, contact emails, plan tier) run only on the first request from each owner id, then cache until the server asks for a refresh. 100 requests from the same workspace don't hit your database 100 times.
-- **Safe by default.** Headers like `Authorization` / `Cookie` and body fields like `password` / `token` / `ssn` are redacted before anything leaves your server. The redaction list extends itself from your OpenAPI spec: the `npx api setup` flow scans your auth mechanisms and flags custom fields automatically.
+- **Safe by default.** Headers like `Authorization` / `Cookie` and body fields like `password` / `token` / `ssn` are redacted before anything leaves your server. The redaction list extends itself from your OpenAPI spec: the `npx restless init` flow scans your auth mechanisms and flags custom fields automatically.
 - **Error-triage built in.** Every response gets an `x-log-url` header pointing at the captured log, and 4xx / 5xx responses also get a `debug` block in the JSON body so you can jump straight to it. If a customer attaches a "next steps" message to an error in the dashboard's Agent Recovery view, the SDK injects it into the response as `debug.recovery` — looked up sync from an in-process cache, never blocking the response on a network call.
 - **Crashes are logged, and grouped by where they crashed.** A handler that throws still produces a log, and the exception's throw site (file + function, never line numbers) is what groups it - so the same bug stays one group in the dashboard no matter what the error message interpolates. The exception is always re-thrown untouched: your framework's error handling behaves exactly as it did without the SDK. **Express needs one extra line** for this, because Express only routes errors to middleware registered after your routes:
 
