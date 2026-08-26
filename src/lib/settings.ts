@@ -3,7 +3,7 @@ import { dirname, join, resolve } from "node:path";
 
 /**
  * Shape of `.restless/settings.json` — created and owned by the `api` CLI
- * (`npx api setup`). See `install.md` for the full schema.
+ * (`npx restless init`). See `install.md` for the full schema.
  */
 /**
  * Additional redaction lists for this specific API. Merged with the SDK's
