@@ -9,7 +9,7 @@ Run in your codebase to get started:
 npx restless init
 ```
 
-This scans your project, figures out your framework, generates an OpenAPI spec, automatically wires the SDK into your server.
+This scans your project, figures out your framework, generates an OpenAPI spec, and automatically wires the SDK into your server.
 
 # @restlessai/sdk
 
