@@ -67,7 +67,7 @@ function isLocalhostUrl(baseUrl: string): boolean {
  *
  * Otherwise batch normally (10 per upload or 5s timer, whichever first).
  * `RESTLESS_SETUP_MODE` only gates the test-runner no-op in push(); it
- * does NOT force instant flush by itself (though during `npx api setup`
+ * does NOT force instant flush by itself (though during `npx restless init`
  * NODE_ENV is typically unset, which already triggers instant flush).
  */
 function shouldFlushImmediately(baseUrl: string): boolean {

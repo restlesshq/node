@@ -280,7 +280,7 @@ apiKey: restless.mask(req.headers.authorization || 'anonymous')
 
 ## 6. `.restless/settings.json`
 
-The SDK auto-reads this file at startup (walking up from cwd). Created and owned by the `api` CLI (`npx api setup`). Schema:
+The SDK auto-reads this file at startup (walking up from cwd). Created and owned by the `restless` CLI (`npx restless init`). Schema:
 
 ```json
 {
@@ -338,7 +338,7 @@ Matching is case-insensitive AND ignores `-`/`_`, so `api_key` / `apiKey` / `API
 
 Two additive sources, both merged with the defaults:
 
-1. **`.restless/settings.json` → `apis[].redact`** (populated by `npx api setup` via the `detect-auth` step, which scans the OAS `components.securitySchemes` + source code for custom auth mechanisms)
+1. **`.restless/settings.json` → `apis[].redact`** (populated by `npx restless init` via the `detect-auth` step, which scans the OAS `components.securitySchemes` + source code for custom auth mechanisms)
 2. **`opts.redact`** (per-process, passed at construction):
    ```js
    restless(key, { redact: { headers: ['x-custom'], bodyKeys: ['apiSecret'] } });
@@ -470,5 +470,5 @@ The client also exposes `restless.errorHandler` - the Express-only error middlew
 1. `grep -r "@restlessai/sdk" --include="*.{js,ts,mjs,cjs}" -l .` returns your server entry file.
 2. `@restlessai/sdk` appears in `package.json#dependencies`.
 3. The middleware/plugin is registered BEFORE route definitions.
-4. `.restless/settings.json` exists (created by `npx api setup`).
+4. `.restless/settings.json` exists (created by `npx restless init`).
 5. Starting the server and curling any endpoint prints an `x-restless-id` header in the response.
