@@ -1121,7 +1121,7 @@ raise, matching on `name` first and then `id`.
 
 **CONFIG-015** (MUST) Only two fields of the resolved entry are consumed at
 runtime: `requestIdPrefix` and `redact`. Everything else in the file
-belongs to the `api` CLI.
+belongs to the `restless` CLI.
 
 ---
 

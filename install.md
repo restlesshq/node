@@ -12,7 +12,7 @@ The document is ordered so an agent can stop as soon as enough context has been 
 
 - **Runtime:** Node 18+, Bun, Deno (the Hono adapter works on Cloudflare Workers too).
 - **Shape:** ESM-first with CJS output; both `require()` and `import` work.
-- **Frameworks supported (as subpath entry points):** `express`, `fastify`, `koa`, `hono`, `next`, `http`.
+- **Frameworks supported:** Express, Fastify, Koa, Hono, Next.js, bare `node:http`. One import covers all of them (see §3); Next.js is the exception and uses the `@restlessai/sdk/next` subpath.
 - **Zero required framework deps:** the peer deps are optional and only loaded if you use that adapter.
 
 ## 2. Install
@@ -28,7 +28,7 @@ npm install @restlessai/sdk
 For every supported framework, the entry point is a **factory that returns a client**:
 
 ```js
-const restless = require('@restlessai/sdk/express')(process.env.RESTLESS_KEY);
+const restless = require('@restlessai/sdk')(process.env.RESTLESS_KEY);
 ```
 
 The client exposes four things:
@@ -40,11 +40,11 @@ The client exposes four things:
 | `flush()`        | Force-upload the current batch (e.g. before `process.exit`).    |
 | `client`         | Underlying low-level client (advanced use).                     |
 
-The import is the same for every framework — `@restlessai/sdk` auto-detects the framework at runtime from the call signature. Only the registration pattern differs.
+The import above is the same for every framework - `@restlessai/sdk` auto-detects the framework at runtime from the call signature, so only the registration pattern differs. Write the bare specifier on a new install.
 
-```js
-const restless = require('@restlessai/sdk')(process.env.RESTLESS_KEY);
-```
+Per-framework subpaths (`@restlessai/sdk/express`, `/fastify`, `/koa`, `/hono`, `/http`) still resolve and still work, so an existing install that uses one is fine to leave alone. Reach for one only to skip the runtime detection on purpose - see the end of §3 on telling a bare-http listener apart from a Next.js route handler.
+
+**Next.js is the exception.** Its recommended integration is a build-time plugin (`withRestless`, `defineConfig`), which lives on the `@restlessai/sdk/next` subpath - see the Next.js section below.
 
 All examples below use `req.user.workspaceId` as a placeholder for the customer's stable, immutable internal id. Replace it with whatever your auth middleware attaches: a workspace uuid, tenant id, or user pk. See [§4.1](#the-owner-block) for how to pick.
 
@@ -285,12 +285,12 @@ The SDK auto-reads this file at startup (walking up from cwd). Created and owned
 ```json
 {
   "version": 1,
-  "projectId": "<team/workspace uuid>",
   "apis": [
     {
       "id": "<api uuid>",
       "name": "Public API",
       "rootDir": ".",
+      "projectId": "<restless project uuid>",
       "oasFile": ".restless/openapi.yaml",
       "framework": "express",
       "language": "javascript",
@@ -312,7 +312,9 @@ What the SDK reads from each `apis[]` entry:
 - `requestIdPrefix` → prepended to the UUID in response headers (decorative)
 - `redact` → merged with built-in redaction defaults
 
-(Other fields like `id`, `name`, `oasFile`, `framework` are consumed by the `api` CLI during setup, not the SDK at runtime.)
+(Other fields like `id`, `name`, `projectId`, `oasFile` and `framework` are consumed by the `restless` CLI during setup, not the SDK at runtime.)
+
+`projectId` is per-API and belongs inside the `apis[]` entry - there is no top-level `projectId`, and the CLI's `login` command looks it up there. If you are hand-editing a settings file written by an older CLI that put it at the root, move it onto the entry.
 
 If multiple APIs are defined, pick one with:
 
@@ -362,15 +364,18 @@ Captured request/response bodies are capped at **256 KB**. Larger bodies are tru
 ## 8. Request IDs
 
 - Always v4 UUIDs from `crypto.randomUUID()`. NOT time-based.
-- Every response gets `x-restless-id` (always ours, always fresh).
-- `x-request-id` is set ONLY if the caller didn't already send one (we don't stomp an existing request-id chain).
+- **Exactly one** id header per captured response, always carrying our own freshly-minted id. Blocked requests are the exception - see §10.
+- **Default: `x-request-id`.** A plain `curl` of your API comes back with that one.
+- The value is the bare UUID, or `<prefix>-<uuid>` when the API has a `requestIdPrefix` in `.restless/settings.json` (the CLI sets one on every project, so `PUB-9f18a0e2-...` is the usual shape).
+- **`x-restless-id` only when the incoming request already carried an `x-request-id`** - we answer on our own header rather than stomping an existing request-id chain. If you send `-H 'x-request-id: ...'`, this is the one you get back.
 - Incoming `x-request-id` values are NEVER reused as our ID.
+- When no `RESTLESS_KEY` resolves, the whole value is instead the literal string `missing-key` - never prefixed, never an id. That is the signature of a server running without the key, usually a restart away.
 
 ## 9. Response modification (SDK-owned, not configurable)
 
 The SDK adds debug info to make error triage trivial:
 
-- Response headers, on **every** status: `x-log-url: <portalOrigin>/logs/<id>`, `x-debug: npx api debug <id>`
+- Response headers, on **every** status of a captured response (so not on a blocked one - see §10): `x-log-url: <portalOrigin>/logs/<id>`, `x-debug: npx api debug <id>`
 - Response body, only on status **>= 400** and only when `content-type: application/json`: a `debug: { log, cli, recovery }` key merged into the top-level object
 
 `<portalOrigin>` is your project's public docs host, which the server tells the SDK on each upload. Until the first upload round-trips (a few requests at most), `x-log-url` is omitted rather than guessed: a URL that 404s is worse than no URL. The ingest host is never used for these links.
@@ -387,7 +392,7 @@ restless.setup((req) => {
 });
 ```
 
-The handler never runs for blocked requests. Block responses still get the `x-restless-id` header but no request is recorded (except under Fastify, where the response hook still fires and the block is logged). `owner.enrich` is not called for a blocked request - see §4.
+The handler never runs for blocked requests, and the block response is written before the id header is stamped: under Express, Koa, Hono and bare http it carries no `x-request-id` / `x-restless-id` and no `x-debug`. Two adapters do stamp it - Fastify, whose `onRequest` hook runs before the block, and Next.js, which sets it on the block response explicitly. No request is recorded either, again except under Fastify, where the response hook still fires and the block is logged. `owner.enrich` is not called for a blocked request - see §4.
 
 ## 10a. Uncaught handler errors
 
@@ -471,4 +476,5 @@ The client also exposes `restless.errorHandler` - the Express-only error middlew
 2. `@restlessai/sdk` appears in `package.json#dependencies`.
 3. The middleware/plugin is registered BEFORE route definitions.
 4. `.restless/settings.json` exists (created by `npx restless init`).
-5. Starting the server and curling any endpoint prints an `x-restless-id` header in the response.
+5. Starting the server and curling any endpoint (`curl -i`) prints an `x-request-id` header carrying a fresh id - `<prefix>-<uuid>` when the API has a `requestIdPrefix`, otherwise a bare UUID. If your curl sends its own `x-request-id`, look for `x-restless-id` instead - see §8.
+6. Plenty of stacks set `x-request-id` themselves, so the unambiguous proof the response came through *our* SDK is the `x-debug` header, which rides every captured response. A request-id value of `missing-key` means the server is up but never loaded `RESTLESS_KEY`; restart it.

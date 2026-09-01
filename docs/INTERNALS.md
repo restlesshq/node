@@ -6,18 +6,18 @@ Details that don't belong in the main README. Useful if you're debugging, self-h
 
 ## Settings resolution
 
-On construction, `restless()` walks up from the current working directory looking for `.restless/settings.json`. The file is owned by the `api/` CLI and looks like:
+On construction, `restless()` walks up from the current working directory looking for `.restless/settings.json`. The file is owned by the `restless` CLI (`npx restless init`) and looks like:
 
 ```json
 {
   "version": 1,
-  "projectId": "<team uuid>",
   "apis": [
     {
       "id": "<api uuid>",
       "name": "Test API",
       "requestIdPrefix": "TST",
       "rootDir": ".",
+      "projectId": "<restless project uuid>",
       "oasFile": ".restless/openapi.yaml",
       "framework": "Fastify",
       "language": "javascript",
@@ -34,7 +34,7 @@ The SDK reads:
 - `apis[].requestIdPrefix` → prepended to the UUID in response headers
 - `apis[].redact` → merged with the built-in redaction denylists
 
-(Other fields like `id`, `name`, `oasFile` are used by the `api` CLI during setup, not the SDK at runtime.)
+(Other fields like `id`, `name`, `projectId` and `oasFile` are used by the `restless` CLI during setup, not the SDK at runtime. `projectId` is per-API and lives on the entry; there is no top-level `projectId`.)
 
 If the file defines exactly one API, it's used automatically. If it defines more than one, you must pass `{ api: "<name>" }` or the constructor throws.
 
@@ -108,7 +108,7 @@ Length and tail are counted in **Unicode code points**, not UTF-16 code units. `
 
 Extensions come from two sources, both additive on top of the defaults:
 
-1. **`.restless/settings.json` → `apis[].redact`**: populated by the `api` setup CLI (it scans the OpenAPI spec + code for custom auth mechanisms). Useful when every deploy of this API needs the same custom redaction.
+1. **`.restless/settings.json` → `apis[].redact`**: populated by the `restless` setup CLI (it scans the OpenAPI spec + code for custom auth mechanisms). Useful when every deploy of this API needs the same custom redaction.
 2. **`opts.redact` passed to `restless()`**: per-process extensions. Useful when the same SDK package is used across multiple services with different secrets.
 
 Both extensions merge with the built-in defaults. Defaults are always applied.
@@ -271,12 +271,14 @@ Adapters compute the fingerprint once, pre-response, so the same value can be (a
 
 - Always RFC 4122 v4 UUIDs from `crypto.randomUUID()` (CSPRNG).
 - Deliberately NOT time-based. IDs appear in URLs and logs; we don't want them leaking ordering.
-- Two response headers:
-  - `x-restless-id`: always set. This is ours.
-  - `x-request-id`: set only if the incoming request didn't already have one. We don't stomp an existing request-id chain.
+- Exactly ONE id header per captured response, always carrying our own fresh id:
+  - `x-request-id` by default. This is what a caller who sent no request id gets back.
+  - `x-restless-id` instead, when the incoming request already carried an `x-request-id`. We don't stomp an existing request-id chain.
+- The header VALUE is the bare UUID, or `<prefix>-<uuid>` when the resolved API entry carries a `requestIdPrefix` (REQID-004). With no API key resolved it is instead the literal `missing-key`, which is how the CLI's `verify` tells "server up, key never loaded" apart from "request dropped".
 - Incoming `x-request-id` values are **never reused** as our ID. We always mint a fresh one so the log lookup is unambiguous.
+- Blocked requests (§Blocking) short-circuit ahead of the stamp on Express, Koa, Hono and bare http, so those responses carry no id header at all. Fastify stamps in `onRequest` and the Next adapter sets it on the block response, so those two do.
 
-On **every** response we also add:
+On **every captured** response we also add (a blocked response gets neither, for the same reason it gets no id header):
 
 - `x-log-url`: deep link to the captured log
 - `x-debug`: the `npx api debug <id>` CLI invocation
