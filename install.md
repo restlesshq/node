@@ -369,13 +369,13 @@ Captured request/response bodies are capped at **256 KB**. Larger bodies are tru
 - The value is the bare UUID, or `<prefix>-<uuid>` when the API has a `requestIdPrefix` in `.restless/settings.json` (the CLI sets one on every project, so `PUB-9f18a0e2-...` is the usual shape).
 - **`x-restless-id` only when the incoming request already carried an `x-request-id`** - we answer on our own header rather than stomping an existing request-id chain. If you send `-H 'x-request-id: ...'`, this is the one you get back.
 - Incoming `x-request-id` values are NEVER reused as our ID.
-- When no `RESTLESS_KEY` resolves, the value is the literal string `missing-key` instead of a UUID. That is the signature of a server running without the key - usually a restart away.
+- When no `RESTLESS_KEY` resolves, the whole value is instead the literal string `missing-key` - never prefixed, never an id. That is the signature of a server running without the key, usually a restart away.
 
 ## 9. Response modification (SDK-owned, not configurable)
 
 The SDK adds debug info to make error triage trivial:
 
-- Response headers, on **every** status: `x-log-url: <portalOrigin>/logs/<id>`, `x-debug: npx api debug <id>`
+- Response headers, on **every** status of a captured response (so not on a blocked one - see §10): `x-log-url: <portalOrigin>/logs/<id>`, `x-debug: npx api debug <id>`
 - Response body, only on status **>= 400** and only when `content-type: application/json`: a `debug: { log, cli, recovery }` key merged into the top-level object
 
 `<portalOrigin>` is your project's public docs host, which the server tells the SDK on each upload. Until the first upload round-trips (a few requests at most), `x-log-url` is omitted rather than guessed: a URL that 404s is worse than no URL. The ingest host is never used for these links.

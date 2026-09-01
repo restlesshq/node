@@ -278,7 +278,7 @@ Adapters compute the fingerprint once, pre-response, so the same value can be (a
 - Incoming `x-request-id` values are **never reused** as our ID. We always mint a fresh one so the log lookup is unambiguous.
 - Blocked requests (§Blocking) short-circuit ahead of the stamp on Express, Koa, Hono and bare http, so those responses carry no id header at all. Fastify stamps in `onRequest` and the Next adapter sets it on the block response, so those two do.
 
-On **every** response we also add:
+On **every captured** response we also add (a blocked response gets neither, for the same reason it gets no id header):
 
 - `x-log-url`: deep link to the captured log
 - `x-debug`: the `npx api debug <id>` CLI invocation
