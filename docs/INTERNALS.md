@@ -271,11 +271,12 @@ Adapters compute the fingerprint once, pre-response, so the same value can be (a
 
 - Always RFC 4122 v4 UUIDs from `crypto.randomUUID()` (CSPRNG).
 - Deliberately NOT time-based. IDs appear in URLs and logs; we don't want them leaking ordering.
-- Exactly ONE id header per response, always carrying our own fresh id:
+- Exactly ONE id header per captured response, always carrying our own fresh id:
   - `x-request-id` by default. This is what a caller who sent no request id gets back.
   - `x-restless-id` instead, when the incoming request already carried an `x-request-id`. We don't stomp an existing request-id chain.
-  - With no API key resolved the value is the literal `missing-key` rather than a UUID, which is how the CLI's `verify` tells "server up, key never loaded" apart from "request dropped".
+- The header VALUE is the bare UUID, or `<prefix>-<uuid>` when the resolved API entry carries a `requestIdPrefix` (REQID-004). With no API key resolved it is instead the literal `missing-key`, which is how the CLI's `verify` tells "server up, key never loaded" apart from "request dropped".
 - Incoming `x-request-id` values are **never reused** as our ID. We always mint a fresh one so the log lookup is unambiguous.
+- Blocked requests (§Blocking) short-circuit ahead of the stamp on Express, Koa, Hono and bare http, so those responses carry no id header at all. Fastify stamps in `onRequest` and the Next adapter sets it on the block response, so those two do.
 
 On **every** response we also add:
 

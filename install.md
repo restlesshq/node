@@ -44,7 +44,7 @@ The import above is the same for every framework - `@restlessai/sdk` auto-detect
 
 Per-framework subpaths (`@restlessai/sdk/express`, `/fastify`, `/koa`, `/hono`, `/http`) still resolve and still work, so an existing install that uses one is fine to leave alone. Reach for one only to skip the runtime detection on purpose - see the end of §3 on telling a bare-http listener apart from a Next.js route handler.
 
-**Next.js is the exception.** Its integration is a build-time plugin rather than a call-signature match, so it is imported from `@restlessai/sdk/next` (`withRestless`, `defineConfig`) - see the Next.js section below.
+**Next.js is the exception.** Its recommended integration is a build-time plugin (`withRestless`, `defineConfig`), which lives on the `@restlessai/sdk/next` subpath - see the Next.js section below.
 
 All examples below use `req.user.workspaceId` as a placeholder for the customer's stable, immutable internal id. Replace it with whatever your auth middleware attaches: a workspace uuid, tenant id, or user pk. See [§4.1](#the-owner-block) for how to pick.
 
@@ -364,8 +364,9 @@ Captured request/response bodies are capped at **256 KB**. Larger bodies are tru
 ## 8. Request IDs
 
 - Always v4 UUIDs from `crypto.randomUUID()`. NOT time-based.
-- **Exactly one** id header per response, always carrying our own freshly-minted id.
+- **Exactly one** id header per captured response, always carrying our own freshly-minted id. Blocked requests are the exception - see §10.
 - **Default: `x-request-id`.** A plain `curl` of your API comes back with that one.
+- The value is the bare UUID, or `<prefix>-<uuid>` when the API has a `requestIdPrefix` in `.restless/settings.json` (the CLI sets one on every project, so `PUB-9f18a0e2-...` is the usual shape).
 - **`x-restless-id` only when the incoming request already carried an `x-request-id`** - we answer on our own header rather than stomping an existing request-id chain. If you send `-H 'x-request-id: ...'`, this is the one you get back.
 - Incoming `x-request-id` values are NEVER reused as our ID.
 - When no `RESTLESS_KEY` resolves, the value is the literal string `missing-key` instead of a UUID. That is the signature of a server running without the key - usually a restart away.
@@ -391,7 +392,7 @@ restless.setup((req) => {
 });
 ```
 
-The handler never runs for blocked requests. Block responses still get the request-id header (§8) but no request is recorded (except under Fastify, where the response hook still fires and the block is logged). `owner.enrich` is not called for a blocked request - see §4.
+The handler never runs for blocked requests, and the block response is written before the id header is stamped: under Express, Koa, Hono and bare http it carries no `x-request-id` / `x-restless-id` and no `x-debug`. Two adapters do stamp it - Fastify, whose `onRequest` hook runs before the block, and Next.js, which sets it on the block response explicitly. No request is recorded either, again except under Fastify, where the response hook still fires and the block is logged. `owner.enrich` is not called for a blocked request - see §4.
 
 ## 10a. Uncaught handler errors
 
@@ -475,4 +476,5 @@ The client also exposes `restless.errorHandler` - the Express-only error middlew
 2. `@restlessai/sdk` appears in `package.json#dependencies`.
 3. The middleware/plugin is registered BEFORE route definitions.
 4. `.restless/settings.json` exists (created by `npx restless init`).
-5. Starting the server and curling any endpoint prints an `x-request-id` header carrying a fresh UUID. If your curl sends its own `x-request-id`, look for `x-restless-id` instead - see §8. A value of `missing-key` means the server is up but never loaded `RESTLESS_KEY`; restart it.
+5. Starting the server and curling any endpoint (`curl -i`) prints an `x-request-id` header carrying a fresh id - `<prefix>-<uuid>` when the API has a `requestIdPrefix`, otherwise a bare UUID. If your curl sends its own `x-request-id`, look for `x-restless-id` instead - see §8.
+6. Plenty of stacks set `x-request-id` themselves, so the unambiguous proof the response came through *our* SDK is the `x-debug` header, which rides every captured response. A request-id value of `missing-key` means the server is up but never loaded `RESTLESS_KEY`; restart it.
