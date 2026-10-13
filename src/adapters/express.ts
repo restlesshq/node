@@ -232,18 +232,28 @@ function expressMiddleware(handle: SetupHandle) {
         path: routePattern,
         portalUrl: engine.portalUrl,
       });
-      for (const [k, v] of Object.entries(debug.headers)) res.setHeader(k, v);
+      // A handler that called res.write() or res.flushHeaders() has already
+      // sent the headers, and part of the body with them. Neither can change
+      // now: setHeader would throw out of res.end and leave the response
+      // hanging, and a rewritten body would be appended after the bytes
+      // already sent. Log the response as it went out instead.
+      const streamed = res.headersSent;
+      if (!streamed) {
+        for (const [k, v] of Object.entries(debug.headers)) res.setHeader(k, v);
+      }
 
       const resHeaders: Record<string, string> = {};
       for (const [k, v] of Object.entries(res.getHeaders())) {
         if (v) resHeaders[k] = Array.isArray(v) ? v.join(", ") : String(v);
       }
 
-      const modified = applyInternalBodyMods(
-        rawBody,
-        resHeaders["content-type"],
-        debug.mutateJsonBody,
-      );
+      const modified = streamed
+        ? rawBody
+        : applyInternalBodyMods(
+            rawBody,
+            resHeaders["content-type"],
+            debug.mutateJsonBody,
+          );
 
       // If we rewrote the body, Content-Length was already set to the
       // pre-injection length by res.json()/res.send(). Update it so the
