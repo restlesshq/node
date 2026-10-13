@@ -68,7 +68,7 @@ jobs:
           HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
           changed=$(git diff --name-only "$BASE" "$HEAD")
-          surface=$(echo "$changed" | grep -E '^src/(lib/(mask|redact|fingerprint|har|requestId|capture)\.ts|adapters/_shared\.ts)$' || true)
+          surface=$(echo "$changed" | grep -E '^src/(lib/(mask|redact|fingerprint|har|requestId|capture|sampling)\.ts|adapters/_shared\.ts)$' || true)
           spec=$(echo "$changed" | grep -E '^spec/' || true)
 
           # capture.ts owns the redaction pipeline and fingerprint reuse;

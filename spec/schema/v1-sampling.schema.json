@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/restlesshq/node/spec/schema/v1-sampling.schema.json",
+  "title": "Restless sampling report (POST /v1/sampling)",
+  "description": "The configuration report an SDK sends when sampling is configured. Normative reference is spec/CONTRACT.md section 12.1, SAMPLE-040 through SAMPLE-054.",
+  "type": "object",
+  "required": ["hash", "default", "routes", "creator"],
+  "additionalProperties": false,
+  "properties": {
+    "hash": {
+      "description": "SAMPLE-040. Lowercase-hex SHA-256 of the canonical form. The same value the SDK sends as x-restless-sampling on uploads.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "default": { "$ref": "#/$defs/mode" },
+    "routes": {
+      "description": "SAMPLE-010, SAMPLE-011. Keys are normalized: uppercase method or *, one space, a printable-ASCII path with {param} segments and no trailing slash.",
+      "type": "object",
+      "propertyNames": { "pattern": "^([A-Z]+|\\*) /[\\x21-\\x7e]*$" },
+      "additionalProperties": { "$ref": "#/$defs/mode" }
+    },
+    "creator": {
+      "description": "Same as the HAR creator on uploads (WIRE-016).",
+      "type": "object",
+      "required": ["name", "version"],
+      "additionalProperties": true,
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  "$defs": {
+    "mode": {
+      "description": "SAMPLE-001, SAMPLE-002. A rate is quantized to a multiple of 0.0001 and is never 1 (that is spelled \"on\").",
+      "oneOf": [
+        { "enum": ["on", "off", "errors"] },
+        { "type": "number", "minimum": 0, "exclusiveMaximum": 1 }
+      ]
+    }
+  }
+}

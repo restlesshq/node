@@ -565,6 +565,119 @@ export const HAR_CASES: CaseDef[] = [
       response: { status: 200, headers: {} } } } },
 ];
 
+// ---------------------------------------------------------------------------
+// sampling
+// ---------------------------------------------------------------------------
+
+const S_ROUTES = {
+  "GET /health": "off",
+  "GET /status": "errors",
+  "GET /pets": 0.1,
+  "* /pets/{id}": 0.5,
+  "DELETE /pets/{id}": "on",
+};
+
+export const SAMPLING_CASES: CaseDef[] = [
+  // --- modes and rates ---
+  { id: "sampling/config-absent", requirement: "SAMPLE-014", op: "samplingConfig",
+    input: { settings: null, code: null },
+    note: "No config anywhere is default \"on\" with no routes: today's behaviour." },
+  { id: "sampling/config-modes", requirement: "SAMPLE-001", op: "samplingConfig",
+    input: { settings: null, code: { default: 0.25, routes: S_ROUTES } } },
+  { id: "sampling/rate-quantized", requirement: "SAMPLE-002", op: "samplingConfig",
+    input: { settings: null, code: { routes: {
+      "GET /a": 0.12345, "GET /b": 0.00004, "GET /c": 0.00005, "GET /d": 0.99995, "GET /e": 0.99994 } } },
+    note: "floor(r * 10000 + 0.5) / 10000. 0.00004 rounds to 0 (stubs only); 0.99995 rounds to 1 and becomes \"on\"." },
+  { id: "sampling/rate-bounds", requirement: "SAMPLE-002", op: "samplingConfig",
+    input: { settings: null, code: { routes: { "GET /zero": 0, "GET /one": 1 } } },
+    note: "0 stays a rate (a stub for every success). 1 is spelled \"on\"." },
+  { id: "sampling/invalid-modes", requirement: "SAMPLE-003", op: "samplingConfig",
+    input: { settings: null, code: { default: "sometimes", routes: {
+      "GET /a": 1.5, "GET /b": -0.1, "GET /c": "OFF", "GET /d": true, "GET /e": null, "GET /f": "0.5" } } },
+    note: "Every invalid mode degrades to \"on\", including near-misses: modes are case-sensitive and a numeric string is not a number." },
+  { id: "sampling/invalid-shapes", requirement: "SAMPLE-003", op: "samplingConfig",
+    input: { settings: ["GET /a"], code: { routes: "off" } },
+    note: "A non-object config or routes value is ignored, never raised on." },
+
+  // --- route keys ---
+  { id: "sampling/key-normalized", requirement: "SAMPLE-011", op: "samplingConfig",
+    input: { settings: null, code: { routes: {
+      "get /pets/:id": "off", "  POST   /orders/:orderId/items/  ": 0.5, "PUT /": "errors", "PATCH //": "off" } } },
+    note: "Method uppercased, :param becomes {param}, trailing slashes removed (but / stays /), surrounding and separating spaces collapsed." },
+  { id: "sampling/key-invalid", requirement: "SAMPLE-012", op: "samplingConfig",
+    input: { settings: null, code: { routes: {
+      "/no-method": "off", "GET": "off", "GET no-slash": "off", "GET /has space": "off",
+      "G3T /x": "off", "GET\t/tab": "off", "GET /café": "off", "* /ok": "off" } } },
+    note: "Only \"* /ok\" survives. Keys are printable ASCII so every SDK sorts and hashes them byte-for-byte alike." },
+  { id: "sampling/key-duplicates", requirement: "SAMPLE-013", op: "samplingConfig",
+    input: { settings: null, code: { routes: { "GET /x": "off", "get /x/": 0.5 } } },
+    note: "Two keys that normalize alike: the later one in source order wins." },
+  { id: "sampling/merge", requirement: "SAMPLE-014", op: "samplingConfig",
+    input: {
+      settings: { default: "errors", routes: { "GET /a": "off", "GET /b": 0.5 } },
+      code: { routes: { "GET /b": "on", "GET /c": 0.1 } } },
+    note: "Routes merge by key with code winning; settings' default survives because code set none." },
+  { id: "sampling/merge-default", requirement: "SAMPLE-014", op: "samplingConfig",
+    input: { settings: { default: "errors" }, code: { default: 0.5 } } },
+
+  // --- lookup ---
+  { id: "sampling/lookup-exact", requirement: "SAMPLE-020", op: "samplingMode",
+    input: { code: { routes: S_ROUTES }, method: "GET", route: "/health" } },
+  { id: "sampling/lookup-exact-beats-wildcard", requirement: "SAMPLE-020", op: "samplingMode",
+    input: { code: { routes: S_ROUTES }, method: "DELETE", route: "/pets/{id}" } },
+  { id: "sampling/lookup-wildcard", requirement: "SAMPLE-020", op: "samplingMode",
+    input: { code: { routes: S_ROUTES }, method: "PUT", route: "/pets/{id}" } },
+  { id: "sampling/lookup-default", requirement: "SAMPLE-020", op: "samplingMode",
+    input: { code: { default: "errors", routes: S_ROUTES }, method: "GET", route: "/orders" } },
+  { id: "sampling/lookup-colon-route", requirement: "SAMPLE-021", op: "samplingMode",
+    input: { code: { routes: S_ROUTES }, method: "PATCH", route: "/pets/:id/" },
+    note: "Koa and Hono report :param patterns. The request route is normalized exactly like a key." },
+  { id: "sampling/lookup-lowercase-method", requirement: "SAMPLE-021", op: "samplingMode",
+    input: { code: { routes: S_ROUTES }, method: "get", route: "/health" } },
+  { id: "sampling/lookup-no-route", requirement: "SAMPLE-021", op: "samplingMode",
+    input: { code: { default: 0.5, routes: S_ROUTES }, method: "GET", route: null },
+    note: "No matched route (bare http, an unmatched 404): the default." },
+  { id: "sampling/lookup-head-is-not-get", requirement: "SAMPLE-022", op: "samplingMode",
+    input: { code: { routes: S_ROUTES }, method: "HEAD", route: "/health" },
+    note: "No implicit HEAD-to-GET mapping. Use a * key to cover both." },
+  { id: "sampling/lookup-no-config", requirement: "SAMPLE-020", op: "samplingMode",
+    input: { method: "GET", route: "/anything" } },
+
+  // --- decide ---
+  { id: "sampling/decide-on", requirement: "SAMPLE-030", op: "samplingDecide", input: { mode: "on", status: 200, u: 0.99 } },
+  { id: "sampling/decide-off-success", requirement: "SAMPLE-030", op: "samplingDecide", input: { mode: "off", status: 200, u: 0 } },
+  { id: "sampling/decide-off-error", requirement: "SAMPLE-030", op: "samplingDecide", input: { mode: "off", status: 500, u: 0 },
+    note: "\"off\" drops errors too. That is what \"errors\" is for." },
+  { id: "sampling/decide-errors-399", requirement: "SAMPLE-030", op: "samplingDecide", input: { mode: "errors", status: 399, u: 0 } },
+  { id: "sampling/decide-errors-400", requirement: "SAMPLE-030", op: "samplingDecide", input: { mode: "errors", status: 400, u: 0.99 } },
+  { id: "sampling/decide-rate-hit", requirement: "SAMPLE-031", op: "samplingDecide", input: { mode: 0.1, status: 200, u: 0.05 } },
+  { id: "sampling/decide-rate-miss", requirement: "SAMPLE-031", op: "samplingDecide", input: { mode: 0.1, status: 200, u: 0.5 } },
+  { id: "sampling/decide-rate-boundary", requirement: "SAMPLE-031", op: "samplingDecide", input: { mode: 0.1, status: 200, u: 0.1 },
+    note: "Full iff u < rate, strictly. u == rate is a stub." },
+  { id: "sampling/decide-rate-zero", requirement: "SAMPLE-031", op: "samplingDecide", input: { mode: 0, status: 200, u: 0 },
+    note: "Rate 0 never sends a success in full, even at u = 0." },
+  { id: "sampling/decide-rate-error-bypass", requirement: "SAMPLE-030", op: "samplingDecide", input: { mode: 0, status: 404, u: 0.99 },
+    note: "A rate never applies to errors." },
+  { id: "sampling/decide-rate-399", requirement: "SAMPLE-030", op: "samplingDecide", input: { mode: 0.5, status: 399, u: 0.9 } },
+
+  // --- canonical form and hash ---
+  { id: "sampling/hash-default-is-null", requirement: "SAMPLE-041", op: "samplingHash",
+    input: { settings: null, code: { default: "on", routes: {} } },
+    note: "An all-defaults config has nothing to report: no canonical form, no hash." },
+  { id: "sampling/hash-routes-only", requirement: "SAMPLE-040", op: "samplingHash",
+    input: { code: { routes: S_ROUTES } } },
+  { id: "sampling/hash-default-only", requirement: "SAMPLE-040", op: "samplingHash",
+    input: { code: { default: "errors" } } },
+  { id: "sampling/hash-order-independent", requirement: "SAMPLE-040", op: "samplingHash",
+    input: { code: { routes: {
+      "DELETE /pets/{id}": "on", "* /pets/{id}": 0.5, "GET /pets": 0.1, "GET /status": "errors", "GET /health": "off" } } },
+    note: "S_ROUTES in reverse. Must hash identically to sampling/hash-routes-only." },
+  { id: "sampling/hash-spelling-independent", requirement: "SAMPLE-040", op: "samplingHash",
+    input: { settings: { routes: { "get /health/": "off", "GET /pets": 0.10004 } },
+      code: { routes: { "GET /status": "errors", "* /pets/:id": 0.5, "DELETE /pets/:id": 1 } } },
+    note: "Different spelling, same normalized config: must hash identically to sampling/hash-routes-only." },
+];
+
 export const ALL_FILES: Array<{ file: string; cases: CaseDef[] }> = [
   { file: "mask.json", cases: MASK_CASES },
   { file: "redact.json", cases: REDACT_CASES },
@@ -573,4 +686,5 @@ export const ALL_FILES: Array<{ file: string; cases: CaseDef[] }> = [
   { file: "recovery-slug.json", cases: RECOVERY_SLUG_CASES },
   { file: "debug-injection.json", cases: INJECTION_CASES },
   { file: "har.json", cases: HAR_CASES },
+  { file: "sampling.json", cases: SAMPLING_CASES },
 ];
