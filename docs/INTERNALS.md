@@ -295,6 +295,46 @@ Return `block: true | { status?, message? }` from the setup callback to reject a
 
 For fleet-wide blocking (e.g. revoked keys across a cluster), the `Blocklist` class in `src/lib/blocklist.ts` exposes `has()` / `replace()` and is wired through the engine. The periodic-fetch piece lands when the metrics server exposes an endpoint. The intent is to avoid requiring Redis by serving a small signed snapshot and keeping it in-process.
 
+## Sampling
+
+Normative spec: `spec/CONTRACT.md` section 12.1. The pure half (merging, key normalization, lookup, the decision table and the config hash) is `src/lib/sampling.ts`; `CaptureEngine.sample()` wraps it.
+
+### One decision per request
+
+Every adapter calls `engine.sample(method, routePattern, status)` exactly once, at the point the status is final and before any SDK header could have left, and every later step reads that one answer. `u` comes from `Math.random()`, drawn inside `sample()`, so re-asking would re-roll it.
+
+| outcome | headers | upload |
+|---|---|---|
+| `full` | id header and debug headers, as without sampling | full entry |
+| `stub` | id header and debug headers (the stub is a real log) | entry without bodies, `sampled: true` |
+| `drop` | none: the id header is taken back | nothing |
+
+Where each adapter decides:
+
+| adapter | decision point | how a drop removes the id header |
+|---|---|---|
+| Express, bare http | first of `res.writeHead` (a streaming handler gets there via `res.write` or `flushHeaders`) or the top of `res.end` | `res.removeHeader`, while headers are unsent |
+| Fastify | `onSend` | `reply.removeHeader` |
+| Koa | after `await next()` | `ctx.remove` |
+| Hono | after `await next()` | `c.header(name, undefined)` |
+| Next.js | after the handler returns | never added: Next stamps headers last |
+
+A thrown request is decided with the status the framework will send (`errorStatus`), so only `"off"` drops it. The route comes from the same place the fingerprint gets it (see "Where the route pattern comes from" above) and is normalized before lookup, so Koa and Hono's `/pets/:id` matches a `/pets/{id}` key.
+
+### Stubs
+
+`record()` drops both bodies before redaction when `sampled` is set, so a stub costs no body parsing. Next.js also skips teeing the response stream for a stub. A stub is always a success (errors are never sampled), so it never has a fingerprint.
+
+### Config report
+
+A non-default config (anything but all `"on"` with no routes) gets a SHA-256 hash of a canonical text form, computed once at construction. Then:
+
+- Every `/v1/request` upload carries `x-restless-sampling: <hash>`.
+- The first `sample()` call fires one `POST /v1/sampling` with the normalized config, without awaiting it. Same gates as an upload: nothing under a test runner or without a key. A failure is not retried.
+- An upload response with `needsSamplingConfig: true` re-sends it, unless one is in flight.
+
+With the default config none of this exists: `sample()` returns `"full"` without touching `Math.random`, and no header or report is sent.
+
 ## Next.js auto-wrap (withRestless)
 
 Three cooperating pieces (`src/adapters/next-plugin.ts`, `next-loader.ts`, and `wrapRouteHandler` in `next.ts`):

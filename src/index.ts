@@ -9,6 +9,8 @@ import type {
   OwnerSetup,
   ProjectDetails,
   ProjectSetup,
+  SamplingMode,
+  SamplingConfig,
 } from "./types.js";
 import { CaptureEngine } from "./lib/capture.js";
 import { mask } from "./lib/mask.js";
@@ -19,7 +21,8 @@ import {
 } from "./lib/requestId.js";
 import { loadSettings, resolveApi } from "./lib/settings.js";
 import { ensureEnvLoaded } from "./lib/env.js";
-import { resolveBaseUrl, isTestRun } from "./lib/uploader.js";
+import { resolveBaseUrl, isTestRun, debugEnabled } from "./lib/uploader.js";
+import { normalizeSampling } from "./lib/sampling.js";
 import { universalMiddleware } from "./lib/universal.js";
 import { SPEC_VERSION, CONFORMANCE_LEVEL } from "./lib/version.js";
 import { errorHandler } from "./adapters/_shared.js";
@@ -35,6 +38,8 @@ export type {
   OwnerSetup,
   ProjectDetails,
   ProjectSetup,
+  SamplingMode,
+  SamplingConfig,
 };
 
 /** Client returned by `restless(apiKey, opts?)`. */
@@ -105,12 +110,14 @@ function restless(apiKey?: string, opts: ClientOptions = {}): RestlessClient {
   // owner.id is now a customer/tenant concept the user supplies per-request.
   let requestIdPrefix: string | undefined;
   let settingsRedact: ClientOptions["redact"] | undefined;
+  let settingsSampling: unknown;
   try {
     const settings = loadSettings();
     const api = resolveApi(settings, opts.api);
     if (api) {
       requestIdPrefix = api.requestIdPrefix;
       settingsRedact = api.redact;
+      settingsSampling = api.sampling;
     }
   } catch (err) {
     throw err;
@@ -133,6 +140,13 @@ function restless(apiKey?: string, opts: ClientOptions = {}): RestlessClient {
     ],
   };
 
+  // Code wins over the settings file, per route (CONTRACT.md SAMPLE-014). A
+  // bad value never throws: it falls back to "on" and says so under DEBUG.
+  const sampling = normalizeSampling(settingsSampling, opts.sampling);
+  if (debugEnabled()) {
+    for (const w of sampling.warnings) console.warn(`[@restlessai/sdk] ${w}`);
+  }
+
   const engine = new CaptureEngine({
     apiKey: resolvedKey,
     // Explicit option wins over RESTLESS_BASE_URL, which wins over the
@@ -142,6 +156,7 @@ function restless(apiKey?: string, opts: ClientOptions = {}): RestlessClient {
     requestIdPrefix,
     fetchImpl: opts.fetch,
     redact: mergedRedact,
+    sampling: sampling.config,
   });
 
   const client: RestlessClient = {
