@@ -18,6 +18,7 @@ committed vectors stop matching it.
 | `harness/run-vectors.mjs` | ports | Replays vectors through any driver. |
 | `harness/fuzz.mjs` | ports | Differential fuzz against the reference. |
 | `schema/v1-request.schema.json` | ports, ingest | JSON Schema for the upload payload. |
+| `schema/v1-sampling.schema.json` | ports, ingest | JSON Schema for the sampling report. |
 | `PORTING.md` | ports | How to port, and how to audit a port. |
 | `cases.ts`, `ops.ts` | Node only | Vector inputs and the Node op table. |
 

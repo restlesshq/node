@@ -40,6 +40,13 @@ import {
   recoverySlug,
   requestIdResponseHeaders,
 } from "../src/adapters/_shared.js";
+import {
+  normalizeSampling,
+  resolveMode,
+  decide,
+  canonicalSampling,
+  samplingHash,
+} from "../src/lib/sampling.js";
 import type { CapturedRequest } from "../src/types.js";
 
 /** JSON has no `undefined`. Absence is represented as `null` on the wire. */
@@ -115,6 +122,27 @@ export const OPS: Record<string, (input: Input) => unknown> = {
 
   // --- HAR ---
   harEntry: (i) => toHarEntry(i.captured as CapturedRequest),
+
+  // --- sampling ---
+  // Routes come back as sorted [key, mode] pairs so the comparison pins
+  // the normalized keys without depending on object key order. Warnings
+  // are debug output, not contract surface, so they are not emitted.
+  samplingConfig: (i) => {
+    const { config } = normalizeSampling(j(i.settings) ?? undefined, j(i.code) ?? undefined);
+    return {
+      default: config.default,
+      routes: [...config.routes.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
+    };
+  },
+  samplingMode: (i) => {
+    const { config } = normalizeSampling(j(i.settings) ?? undefined, j(i.code) ?? undefined);
+    return resolveMode(config, i.method, j(i.route) ?? undefined);
+  },
+  samplingDecide: (i) => decide(i.mode, i.status, i.u),
+  samplingHash: (i) => {
+    const { config } = normalizeSampling(j(i.settings) ?? undefined, j(i.code) ?? undefined);
+    return { canonical: canonicalSampling(config), hash: samplingHash(config) };
+  },
 };
 
 export function runOp(op: string, input: Input): unknown {

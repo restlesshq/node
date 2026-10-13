@@ -160,7 +160,32 @@ const GENERATORS = {
       ? `Error: x\n    at ${randomString(6)} (/proj/src/${randomString(5)}.js:${int(99)}:1)`
       : null,
   }),
+  // Keys and modes are where the languages can disagree: whitespace and
+  // non-ASCII in keys (SAMPLE-010), :param rewriting (SAMPLE-011), and the
+  // float quantization of rates (SAMPLE-002).
+  samplingConfig: () => ({ settings: randomSampling(), code: randomSampling() }),
+  samplingHash: () => ({ settings: randomSampling(), code: randomSampling() }),
+  samplingMode: () => ({
+    code: randomSampling(),
+    method: pick(["GET", "get", "POST", "HEAD", "*"]),
+    route: pick([randomRoute(), randomRoute().replace(/\{(\w+)\}/g, ":$1") + pick(["", "/", "//"]), null]),
+  }),
+  samplingDecide: () => ({
+    mode: pick(["on", "off", "errors", 0, 0.1, 0.5, 0.9999, rnd()]),
+    status: pick([200, 204, 301, 399, 400, 404, 500]),
+    u: pick([0, rnd(), 0.5, 0.1]),
+  }),
 };
+
+function randomSampling() {
+  if (rnd() < 0.15) return null;
+  const mode = () => pick(["on", "off", "errors", "OFF", 0, 1, rnd(), rnd() * 2 - 0.5, 0.00005, 0.12345, null, "0.5"]);
+  const key = () => pick(["GET", "get", "POST", "*", "", "G3T"]) + pick([" ", "  ", "\t", ""]) +
+    pick([randomRoute(), randomRoute().replace(/\{(\w+)\}/g, ":$1") + pick(["", "/"]), "/" + randomString(6), "no-slash"]);
+  const routes = {};
+  for (let i = 0; i < int(5); i++) routes[key()] = mode();
+  return rnd() < 0.3 ? { default: mode(), routes } : { routes };
+}
 
 const OPS = Object.keys(GENERATORS);
 
