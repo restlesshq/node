@@ -232,6 +232,87 @@ describe("express adapter (one-liner)", () => {
     expect(JSON.parse(result.body)).toEqual({ hello: "world" });
   });
 
+  // res.write() sends the headers, so by res.end they are frozen. Setting a
+  // debug header then throws ERR_HTTP_HEADERS_SENT out of res.end and the
+  // response never finishes; the client hangs.
+  describe("streamed responses (headers already sent at res.end)", () => {
+    it("finishes a 2xx and still logs it", async () => {
+      const { uploads, fetchImpl } = bodyCollector();
+      const restless = restlessExpress("rdme_test", {
+        baseUrl: "http://localhost:3003",
+        fetch: fetchImpl,
+      });
+      const mw = restless.setup(() => ({}));
+
+      const result = await run(
+        mw,
+        (_req, res) => {
+          res.setHeader("content-type", "text/plain");
+          res.write("hello ");
+          res.end("world");
+        },
+        { method: "GET", path: "/stream" },
+      );
+      expect(result.status).toBe(200);
+      expect(result.body).toBe("hello world");
+      // Set before the handler ran, so it went out with the first write.
+      expect(result.headers["x-request-id"]).toBeDefined();
+
+      await restless.flush();
+      expect(uploads).toHaveLength(1);
+      expect(uploads[0].request.log.entries[0].response.content.text).toBe(
+        "hello world",
+      );
+    });
+
+    it("leaves a streamed 4xx JSON body untouched instead of re-sending it", async () => {
+      const { uploads, fetchImpl } = bodyCollector();
+      const restless = restlessExpress("rdme_test", {
+        baseUrl: "http://localhost:3003",
+        fetch: fetchImpl,
+      });
+      const mw = restless.setup(() => ({}));
+
+      const result = await run(
+        mw,
+        (_req, res) => {
+          res.statusCode = 400;
+          res.setHeader("content-type", "application/json");
+          res.write('{"error":');
+          res.end('"bad request"}');
+        },
+        { method: "POST", path: "/stream" },
+      );
+      expect(result.status).toBe(400);
+      // No debug object: the first half of the body is already on the wire,
+      // so a rewritten whole body would be appended after it.
+      expect(JSON.parse(result.body)).toEqual({ error: "bad request" });
+
+      await restless.flush();
+      expect(uploads).toHaveLength(1);
+      expect(uploads[0].errorFingerprint).toBeDefined();
+    });
+
+    it("finishes after an explicit flushHeaders()", async () => {
+      const restless = restlessExpress("rdme_test", {
+        baseUrl: "http://localhost:3003",
+        fetch: bodyCollector().fetchImpl,
+      });
+      const mw = restless.setup(() => ({}));
+
+      const result = await run(
+        mw,
+        (_req, res) => {
+          res.flushHeaders();
+          res.end("ok");
+        },
+        { method: "GET", path: "/flushed" },
+      );
+      expect(result.status).toBe(200);
+      expect(result.body).toBe("ok");
+    });
+  });
+
   it("captures the request body when the handler reads it with req.on('data')", async () => {
     const { uploads, fetchImpl } = bodyCollector();
     const restless = restlessExpress("rdme_test", {
