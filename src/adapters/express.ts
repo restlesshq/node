@@ -14,6 +14,7 @@ import {
   resolveBlock,
   recordThrown,
   errorStack,
+  errorStatus,
   captureStateOf,
   errorHandler,
   CAPTURE_STATE,
@@ -24,6 +25,7 @@ import {
   makeAdapterClient,
   type AdapterClient,
 } from "../lib/adapterFactory.js";
+import type { SamplingOutcome } from "../lib/sampling.js";
 
 /** The raw middleware — used internally and exposed for advanced wiring. */
 function expressMiddleware(handle: SetupHandle) {
@@ -140,6 +142,29 @@ function expressMiddleware(handle: SetupHandle) {
     const startedAt = new Date().toISOString();
     const startTime = Date.now();
 
+    // Express has matched the route by the time anything is written.
+    const routeOf = () =>
+      (req as unknown as { route?: { path?: string } }).route?.path?.replace(
+        /:(\w+)/g,
+        "{$1}",
+      );
+
+    // One sampling decision per request (SAMPLE-032), taken the first time
+    // the status is final: in writeHead when the handler streams (res.write
+    // and flushHeaders both get there before res.end), otherwise at the top
+    // of res.end. The id header was stamped before the handler ran, so a
+    // dropped request has to take it back here, while it still can.
+    let outcome: SamplingOutcome | undefined;
+    const decideOnce = (status: number): SamplingOutcome => {
+      if (outcome === undefined) {
+        outcome = engine.sample(req.method || "GET", routeOf(), status);
+        if (outcome === "drop" && !res.headersSent) {
+          for (const k of Object.keys(idHeaders)) res.removeHeader(k);
+        }
+      }
+      return outcome;
+    };
+
     const capturedRequest = () => ({
       method: req.method || "GET",
       url: fullUrl,
@@ -155,6 +180,7 @@ function expressMiddleware(handle: SetupHandle) {
     state.recordThrow = (err: unknown) => {
       if (state.recorded) return;
       state.recorded = true;
+      if (decideOnce(errorStatus(err)) === "drop") return;
       recordThrown(engine, err, {
         requestId: rawId,
         startedAt,
@@ -167,6 +193,15 @@ function expressMiddleware(handle: SetupHandle) {
     const resChunks: Buffer[] = [];
     const origWrite = res.write;
     const origEnd = res.end;
+    const origWriteHead = res.writeHead;
+
+    (res as unknown as { writeHead: unknown }).writeHead = function (
+      statusCode: unknown,
+      ...args: unknown[]
+    ) {
+      decideOnce(typeof statusCode === "number" ? statusCode : res.statusCode);
+      return (origWriteHead as Function).apply(res, [statusCode, ...args]);
+    };
 
     (res as unknown as { write: unknown }).write = function (
       chunk: unknown,
@@ -180,6 +215,13 @@ function expressMiddleware(handle: SetupHandle) {
       chunk: unknown,
       ...args: unknown[]
     ) {
+      // Dropped: no log, so no debug headers pointing at one, and the body
+      // goes out exactly as the handler wrote it.
+      if (decideOnce(res.statusCode) === "drop") {
+        state.recorded = true;
+        return (origEnd as Function).apply(res, [chunk, ...args]);
+      }
+
       if (chunk) resChunks.push(Buffer.from(chunk as Buffer));
 
       const duration = Date.now() - startTime;
@@ -193,9 +235,7 @@ function expressMiddleware(handle: SetupHandle) {
       for (const [k, v] of Object.entries(res.getHeaders())) {
         if (v) preResHeaders[k] = Array.isArray(v) ? v.join(", ") : String(v);
       }
-      const rawPattern = (req as unknown as { route?: { path?: string } }).route
-        ?.path;
-      const routePattern = rawPattern?.replace(/:(\w+)/g, "{$1}");
+      const routePattern = routeOf();
 
       // Set by the exported error middleware when the handler threw and
       // Express routed the error here. Without it a crashing handler
@@ -283,6 +323,7 @@ function expressMiddleware(handle: SetupHandle) {
           },
           stackTrace,
           errorFingerprint: fingerprint,
+          sampled: outcome === "stub",
         });
       }
 

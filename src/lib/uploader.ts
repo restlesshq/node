@@ -15,6 +15,12 @@ export interface UploaderConfig {
   requestIdPrefix?: string;
   fetchImpl?: typeof fetch;
   /**
+   * Hash of the sampling config (CONTRACT.md SAMPLE-040), stamped on every
+   * upload as `x-restless-sampling` (SAMPLE-052). Absent when sampling is
+   * not configured, and then no header is sent at all.
+   */
+  samplingHash?: string;
+  /**
    * Called with the parsed server response body after a successful upload.
    * `batchFingerprints` is the deduplicated list of error fingerprint keys
    * the engine just uploaded; the engine uses it to negative-cache any
@@ -23,7 +29,7 @@ export interface UploaderConfig {
   onResponse?: (body: unknown, batchFingerprints: string[]) => void;
 }
 
-function debugEnabled(): boolean {
+export function debugEnabled(): boolean {
   const flag = process.env.DEBUG || "";
   return flag === "restless" || flag.split(/[\s,]+/).includes("restless") || flag === "*";
 }
@@ -92,8 +98,10 @@ export class Uploader {
   private readonly prefix: string | undefined;
   private readonly fetchImpl: typeof fetch;
   private readonly onResponse: UploaderConfig["onResponse"];
+  private readonly samplingHash: string | undefined;
 
   constructor(cfg: UploaderConfig) {
+    this.samplingHash = cfg.samplingHash;
     this.apiKey = cfg.apiKey;
     this.baseUrl = cfg.baseUrl;
     this.prefix = cfg.requestIdPrefix;
@@ -211,6 +219,8 @@ export class Uploader {
         _id: captured.requestId,
         routePattern: captured.routePattern,
         errorFingerprint: captured.errorFingerprint,
+        // Present only on a stub (WIRE-030); `undefined` drops the key.
+        sampled: captured.sampled ? true : undefined,
         // Primary grouping key: project.id if provided (so multiple
         // end-users within one project aggregate together), falling back
         // to the individual apiKey.
@@ -253,6 +263,9 @@ export class Uploader {
           // attributed to an SDK + spec version instead of guessed at.
           // See spec/CONTRACT.md META-002.
           "X-Restless-Spec-Version": SPEC_VERSION,
+          ...(this.samplingHash
+            ? { "x-restless-sampling": this.samplingHash }
+            : {}),
         },
         body: JSON.stringify(payload),
       });
@@ -280,6 +293,36 @@ export class Uploader {
     } catch (err) {
       if (debugEnabled())
         console.error("[@restlessai/sdk] upload error:", err);
+    }
+  }
+
+  /**
+   * POST the sampling config report (CONTRACT.md SAMPLE-050). Same gates as
+   * an upload: nothing under a test runner or without a project key
+   * (SAMPLE-051). Resolves `true` only on a 2xx; never throws.
+   */
+  async sendSamplingReport(report: unknown): Promise<boolean> {
+    if (isTestRun() && process.env.RESTLESS_SETUP_MODE !== "1") return false;
+    if (!this.apiKey) return false;
+    const url = `${this.baseUrl}/v1/sampling`;
+    try {
+      const res = await this.fetchImpl(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this.apiKey}`,
+          "X-Restless-Spec-Version": SPEC_VERSION,
+        },
+        body: JSON.stringify(report),
+      });
+      if (debugEnabled()) {
+        console.log(`[@restlessai/sdk] sampling report: ${res.status}`);
+      }
+      return res.ok;
+    } catch (err) {
+      if (debugEnabled())
+        console.error("[@restlessai/sdk] sampling report error:", err);
+      return false;
     }
   }
 }

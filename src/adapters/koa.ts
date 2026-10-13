@@ -8,6 +8,7 @@ import {
   lookupErrorRecovery,
   resolveBlock,
   recordThrown,
+  errorStatus,
   type SetupHandle,
 } from "./_shared.js";
 import {
@@ -63,8 +64,20 @@ function koaMiddleware(handle: SetupHandle) {
     }
 
     const duration = Date.now() - startTime;
+    const routePattern = (ctx as any)._matchedRoute as string | undefined;
+
+    // One decision per request (SAMPLE-032). Koa has not written anything
+    // yet, either way: it responds after the middleware stack unwinds.
+    const outcome = engine.sample(
+      ctx.method,
+      routePattern,
+      failure ? errorStatus(failure.err) : ctx.status,
+    );
 
     if (failure) {
+      // Koa's onerror strips every header from a thrown request anyway, so
+      // a drop only has to skip the log.
+      if (outcome === "drop") throw failure.err;
       // Koa unwinds a downstream throw through every awaiting middleware
       // before ctx.onerror builds the response, so this is the only point
       // at which the SDK can see the exception at all. There is no body yet
@@ -74,7 +87,7 @@ function koaMiddleware(handle: SetupHandle) {
         requestId: rawId,
         startedAt,
         duration,
-        routePattern: (ctx as any)._matchedRoute,
+        routePattern,
         request: {
           method: ctx.method,
           url: fullUrl,
@@ -91,6 +104,13 @@ function koaMiddleware(handle: SetupHandle) {
       throw failure.err;
     }
 
+    // Dropped: no log, so no id header or debug headers pointing at one
+    // (SAMPLE-033).
+    if (outcome === "drop") {
+      for (const k of Object.keys(idHeaders)) ctx.remove(k);
+      return;
+    }
+
     const preResHeaders: Record<string, string> = {};
     for (const [k, v] of Object.entries(ctx.response.headers)) {
       if (v) preResHeaders[k] = Array.isArray(v) ? v.join(", ") : String(v);
@@ -105,8 +125,6 @@ function koaMiddleware(handle: SetupHandle) {
         rawBody = undefined;
       }
     }
-
-    const routePattern = (ctx as any)._matchedRoute;
 
     const { fingerprint, recovery } = lookupErrorRecovery(engine, {
       request: { method: ctx.method, url: fullUrl, headers: reqHeaders },
@@ -167,6 +185,7 @@ function koaMiddleware(handle: SetupHandle) {
         project: setup.project,
       },
       errorFingerprint: fingerprint,
+      sampled: outcome === "stub",
     });
   };
 }

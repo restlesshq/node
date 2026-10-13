@@ -34,6 +34,8 @@ export interface ApiSettings {
      * monorepo gets its own project, so this lives here, not at the root. */
     projectId?: string;
     redact?: RedactSettings;
+    /** Validated at runtime by `normalizeSampling`, so typed loosely here. */
+    sampling?: unknown;
   }>;
 }
 
@@ -42,6 +44,7 @@ export interface ApiEntry {
   name: string;
   requestIdPrefix?: string;
   redact?: RedactSettings;
+  sampling?: unknown;
 }
 
 /**
@@ -113,6 +116,7 @@ export function resolveApi(
       name: match.name,
       requestIdPrefix: match.requestIdPrefix,
       redact: match.redact,
+      sampling: match.sampling,
     };
   }
 
@@ -123,6 +127,7 @@ export function resolveApi(
       name: only.name,
       requestIdPrefix: only.requestIdPrefix,
       redact: only.redact,
+      sampling: only.sampling,
     };
   }
 

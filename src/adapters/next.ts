@@ -8,6 +8,7 @@ import {
   lookupErrorRecovery,
   resolveBlock,
   recordThrown,
+  errorStatus,
   type SetupHandle,
 } from "./_shared.js";
 import {
@@ -267,6 +268,9 @@ function nextWrapFactory(handle: SetupHandle) {
         // exception itself never reaches a response we can read, so
         // without this the crash produces no log at all.
         if (isNextControlFlow(err)) throw err;
+        if (engine.sample(req.method, routePattern, errorStatus(err)) === "drop") {
+          throw err;
+        }
         recordThrown(engine, err, {
           requestId: rawId,
           startedAt,
@@ -286,13 +290,22 @@ function nextWrapFactory(handle: SetupHandle) {
       }
       const duration = Date.now() - startTime;
 
+      // One decision per request (SAMPLE-032). Nothing of ours is on the
+      // response yet: the id and debug headers are only added below.
+      const outcome = engine.sample(req.method, routePattern, res.status);
+      // Dropped: the handler's response, untouched. No log, and so no
+      // header pointing at one (SAMPLE-033).
+      if (outcome === "drop") return res;
+
       const resHeaders: Record<string, string> = {};
       res.headers.forEach((v, k) => {
         resHeaders[k] = v;
       });
 
+      // A stub never ships the body (SAMPLE-034) and, being a success, has
+      // nothing to fingerprint, so skip teeing the stream to read it.
       let rawBody: string | undefined;
-      if (isCapturableBody(resHeaders)) {
+      if (outcome !== "stub" && isCapturableBody(resHeaders)) {
         try {
           rawBody = await res.clone().text();
         } catch {
@@ -367,6 +380,7 @@ function nextWrapFactory(handle: SetupHandle) {
           project: setup.project,
         },
         errorFingerprint: fingerprint,
+        sampled: outcome === "stub",
       });
 
       if (mutated) {
