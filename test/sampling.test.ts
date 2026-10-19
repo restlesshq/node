@@ -4,6 +4,7 @@ import {
   resolveMode,
   decide,
   samplingHash,
+  canonicalSampling,
 } from "../src/lib/sampling.js";
 
 // The observable behaviour is pinned by spec/vectors/sampling.json. These
@@ -53,4 +54,16 @@ describe("never raises (SAMPLE-003, SAMPLE-012, SAMPLE-014)", () => {
       expect(decide(mode, 200, 0.99)).toBe("full");
     });
   }
+});
+
+describe("rate tokens (SAMPLE-002, SAMPLE-040)", () => {
+  // The token is re-derived from the quantized float, which must give back
+  // exactly the integer k it came from for every reachable rate.
+  it("round-trips every k in 0..9999", () => {
+    for (let k = 0; k < 10000; k++) {
+      const { config } = normalizeSampling(undefined, { default: k / 10000 });
+      const line = `default\t0.${String(k).padStart(4, "0")}\n`;
+      expect(canonicalSampling(config)).toBe(line);
+    }
+  });
 });
