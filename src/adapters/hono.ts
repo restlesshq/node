@@ -80,8 +80,15 @@ function honoMiddleware(handle: SetupHandle) {
       failure ? errorStatus(failure.err) : (c.res as Response).status,
     );
 
+    // Dropped: no log, so no id header pointing at one (SAMPLE-033). On a
+    // throw too: Hono's onError copies queued headers onto its response.
+    if (outcome === "drop") {
+      for (const k of Object.keys(idHeaders)) c.header(k, undefined);
+      if (failure) throw failure.err;
+      return;
+    }
+
     if (failure) {
-      if (outcome === "drop") throw failure.err;
       // A throw that made it back to us means nothing downstream (and no
       // app.onError) built a response for it - Hono's own error handling
       // still runs, above us, once we re-throw.
@@ -99,14 +106,6 @@ function honoMiddleware(handle: SetupHandle) {
         user: { apiKey: setup.apiKey, project: setup.project },
       });
       throw failure.err;
-    }
-
-    // Dropped: no log, so no id header pointing at one (SAMPLE-033).
-    // `c.header(name, undefined)` deletes, and copes with a finalized
-    // response whose headers are immutable.
-    if (outcome === "drop") {
-      for (const k of Object.keys(idHeaders)) c.header(k, undefined);
-      return;
     }
 
     // Hono's compose catches a downstream throw itself, routes it to

@@ -428,6 +428,73 @@ describe("sampling from .restless/settings.json", () => {
   });
 });
 
+describe("hono: a dropped request that throws", () => {
+  it("takes back the queued id header before Hono's onError builds the response", async () => {
+    const { uploads, fetchImpl } = collector();
+    const client = restlessHono("rdme_test", {
+      baseUrl: "http://localhost:3003",
+      fetch: fetchImpl,
+      sampling: { routes: { "GET /boom": "off" } },
+    });
+    const mw = client.setup(() => ({}));
+    // Like Hono's Context: headers set before a response exists are queued,
+    // and the response app.onError builds afterwards carries them.
+    const queued = new Headers();
+    const c: any = {
+      req: { raw: new Request("http://localhost/boom"), routePath: "/boom" },
+      res: undefined,
+      header: (k: string, v: string | undefined) =>
+        v === undefined ? queued.delete(k) : queued.set(k, v),
+    };
+    const err = new Error("boom");
+    await expect(mw(c, async () => { throw err; })).rejects.toBe(err);
+    const onErrorResponse = new Response("Internal Server Error", { status: 500, headers: queued });
+
+    await client.flush();
+    expect(hasIdHeader(Object.fromEntries(onErrorResponse.headers.entries()))).toBe(false);
+    expect(uploads).toEqual([]);
+  });
+});
+
+describe("koa: a dropped request that throws", () => {
+  it("takes back the id header for an upstream try/catch that responds itself", async () => {
+    const { uploads, fetchImpl } = collector();
+    const client = restlessKoa("rdme_test", {
+      baseUrl: "http://localhost:3003",
+      fetch: fetchImpl,
+      sampling: { routes: { "GET /boom": "off" } },
+    });
+    const mw = client.setup(() => ({}));
+    const headers: Record<string, string> = {};
+    const ctx: any = {
+      protocol: "http",
+      host: "localhost",
+      originalUrl: "/boom",
+      url: "/boom",
+      method: "GET",
+      status: 404,
+      request: { headers: { host: "localhost" } },
+      response: { headers },
+      set: (k: string, v: string) => (headers[k] = v),
+      remove: (k: string) => delete headers[k],
+    };
+    // The usual Koa error middleware: catch, then respond without onerror.
+    try {
+      await mw(ctx, async () => {
+        ctx._matchedRoute = "/boom";
+        throw new Error("boom");
+      });
+    } catch {
+      ctx.status = 500;
+      ctx.body = { error: "handled" };
+    }
+
+    await client.flush();
+    expect(hasIdHeader(headers)).toBe(false);
+    expect(uploads).toEqual([]);
+  });
+});
+
 describe("express: deciding when the handler streams", () => {
   it("takes the id header back in writeHead, before the first byte", async () => {
     const { uploads, fetchImpl } = collector();

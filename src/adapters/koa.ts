@@ -74,10 +74,15 @@ function koaMiddleware(handle: SetupHandle) {
       failure ? errorStatus(failure.err) : ctx.status,
     );
 
+    // Dropped: no log, so no id header pointing at one (SAMPLE-033). On a
+    // throw too: an upstream try/catch can respond without Koa's onerror.
+    if (outcome === "drop") {
+      for (const k of Object.keys(idHeaders)) ctx.remove(k);
+      if (failure) throw failure.err;
+      return;
+    }
+
     if (failure) {
-      // Koa's onerror strips every header from a thrown request anyway, so
-      // a drop only has to skip the log.
-      if (outcome === "drop") throw failure.err;
       // Koa unwinds a downstream throw through every awaiting middleware
       // before ctx.onerror builds the response, so this is the only point
       // at which the SDK can see the exception at all. There is no body yet
@@ -102,13 +107,6 @@ function koaMiddleware(handle: SetupHandle) {
       // Untouched, so Koa's own error handling behaves exactly as it would
       // without the SDK installed (SAFETY-001).
       throw failure.err;
-    }
-
-    // Dropped: no log, so no id header or debug headers pointing at one
-    // (SAMPLE-033).
-    if (outcome === "drop") {
-      for (const k of Object.keys(idHeaders)) ctx.remove(k);
-      return;
     }
 
     const preResHeaders: Record<string, string> = {};
