@@ -301,6 +301,10 @@ The SDK auto-reads this file at startup (walking up from cwd). Created and owned
         "headers":     ["x-company-auth"],
         "queryParams": ["signed_token"],
         "bodyKeys":    ["ssh_private_key"]
+      },
+      "sampling": {
+        "default": "on",
+        "routes": { "GET /health": "off", "GET /pets": 0.1 }
       }
     }
   ]
@@ -311,6 +315,7 @@ What the SDK reads from each `apis[]` entry:
 
 - `requestIdPrefix` → prepended to the UUID in response headers (decorative)
 - `redact` → merged with built-in redaction defaults
+- `sampling` → merged with the `sampling` option in code, code winning per route (see section 7a)
 
 (Other fields like `id`, `name`, `projectId`, `oasFile` and `framework` are consumed by the `restless` CLI during setup, not the SDK at runtime.)
 
@@ -360,6 +365,29 @@ Regex: `<REDACTED:(\d+)(?::(.{4}))?>`. The dashboard pattern-matches on this.
 ### Body size limit
 
 Captured request/response bodies are capped at **256 KB**. Larger bodies are truncated with `[...TRUNCATED: original N bytes]`. No way to raise this without editing the SDK.
+
+## 7a. Sampling (off by default)
+
+Without a `sampling` block every request is logged in full. With one, each endpoint gets a mode:
+
+| mode | successes (< 400) | errors (>= 400) |
+|---|---|---|
+| `"on"` (default) | full log | full log |
+| a rate `0` to `1` | that fraction in full, the rest without bodies | full log |
+| `"errors"` | nothing sent | full log |
+| `"off"` | nothing sent | nothing sent |
+
+```js
+restless(process.env.RESTLESS_KEY, {
+  sampling: { routes: { "GET /health": "off", "GET /pets": 0.1, "* /internal/{job}": "errors" } },
+});
+```
+
+Rules an installer should know:
+
+- Keys are `"<METHOD> <route pattern>"`, with `*` for any method. Use the pattern the framework matched (`/pets/{id}` or `/pets/:id`, both work), never a concrete URL like `/pets/42`. `HEAD` does not fall back to `GET`.
+- Only suggest `"off"` or `"errors"` for endpoints the user agrees are noise (health checks, readiness probes, polling). Never sample auth or payment endpoints without asking.
+- A request that sends nothing also gets no `x-request-id` / `x-restless-id` or `x-debug` header, so do not use an `"off"` route to verify the install.
 
 ## 8. Request IDs
 
@@ -447,6 +475,15 @@ interface ClientOptions {
     headers?:     string[];
     bodyKeys?:    string[];
     queryParams?: string[];
+  };
+
+  /**
+   * Per-endpoint sampling (§7a). Merged with `sampling` in
+   * .restless/settings.json; this option wins per route.
+   */
+  sampling?: {
+    default?: "on" | "off" | "errors" | number;
+    routes?: Record<string, "on" | "off" | "errors" | number>;
   };
 }
 ```

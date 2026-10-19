@@ -9,6 +9,7 @@ import {
   resolveBlock,
   recordThrown,
   errorStack,
+  errorStatus,
   type SetupHandle,
 } from "./_shared.js";
 import {
@@ -70,6 +71,22 @@ function honoMiddleware(handle: SetupHandle) {
     }
 
     const duration = Date.now() - startTime;
+
+    // One decision per request (SAMPLE-032). `c.res` has not been sent yet:
+    // Hono serves it after the middleware chain unwinds.
+    const outcome = engine.sample(
+      req.method,
+      c.req.routePath,
+      failure ? errorStatus(failure.err) : (c.res as Response).status,
+    );
+
+    // Dropped: no log, so no id header pointing at one (SAMPLE-033). On a
+    // throw too: Hono's onError copies queued headers onto its response.
+    if (outcome === "drop") {
+      for (const k of Object.keys(idHeaders)) c.header(k, undefined);
+      if (failure) throw failure.err;
+      return;
+    }
 
     if (failure) {
       // A throw that made it back to us means nothing downstream (and no
@@ -171,6 +188,7 @@ function honoMiddleware(handle: SetupHandle) {
       },
       stackTrace,
       errorFingerprint: fingerprint,
+      sampled: outcome === "stub",
     });
   };
 }

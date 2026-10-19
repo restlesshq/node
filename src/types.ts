@@ -118,6 +118,12 @@ export interface CapturedRequest {
   duration: number;
   user?: UserContext;
   /**
+   * Set when sampling chose to send this request without bodies
+   * (CONTRACT.md SAMPLE-034). `record()` drops both bodies before they are
+   * redacted, and the upload carries `sampled: true`.
+   */
+  sampled?: boolean;
+  /**
    * Stack of the exception the handler threw, when the adapter caught one.
    * Feeds the `stack` fingerprint strategy (`lib/fingerprint.ts`), which is
    * unreachable without it. Local-only: the stack is never uploaded, only
@@ -179,6 +185,9 @@ export type SetupCallback<TReq = any> = (
   req: TReq,
 ) => SetupResult | Promise<SetupResult>;
 
+export type { SamplingMode, SamplingConfig } from "./lib/sampling.js";
+import type { SamplingConfig } from "./lib/sampling.js";
+
 /** Public options for `restless(apiKey, opts?)`. */
 export interface ClientOptions {
   /** Name of the API in `.restless/settings.json`. Required when >1 API is defined. */
@@ -197,6 +206,23 @@ export interface ClientOptions {
     bodyKeys?: string[];
     queryParams?: string[];
   };
+
+  /**
+   * Send less for high-traffic endpoints. Each endpoint is `"on"` (the
+   * default: everything in full), `"off"` (nothing), `"errors"` (only
+   * status >= 400), or a rate in [0, 1]: that fraction of successful
+   * requests in full and the rest without bodies. Errors are always sent
+   * in full unless the route is "off".
+   *
+   *     sampling: {
+   *       default: "on",
+   *       routes: { "GET /health": "off", "GET /pets": 0.1, "* /pets/{id}": "errors" },
+   *     }
+   *
+   * Merged with `sampling` in `.restless/settings.json`; this option wins
+   * per route. An invalid value never throws: it falls back to `"on"`.
+   */
+  sampling?: SamplingConfig;
 
   /** @internal — test hook for swapping the fetch implementation. */
   fetch?: typeof fetch;

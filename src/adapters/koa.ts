@@ -8,6 +8,7 @@ import {
   lookupErrorRecovery,
   resolveBlock,
   recordThrown,
+  errorStatus,
   type SetupHandle,
 } from "./_shared.js";
 import {
@@ -63,6 +64,23 @@ function koaMiddleware(handle: SetupHandle) {
     }
 
     const duration = Date.now() - startTime;
+    const routePattern = (ctx as any)._matchedRoute as string | undefined;
+
+    // One decision per request (SAMPLE-032). Koa has not written anything
+    // yet, either way: it responds after the middleware stack unwinds.
+    const outcome = engine.sample(
+      ctx.method,
+      routePattern,
+      failure ? errorStatus(failure.err) : ctx.status,
+    );
+
+    // Dropped: no log, so no id header pointing at one (SAMPLE-033). On a
+    // throw too: an upstream try/catch can respond without Koa's onerror.
+    if (outcome === "drop") {
+      for (const k of Object.keys(idHeaders)) ctx.remove(k);
+      if (failure) throw failure.err;
+      return;
+    }
 
     if (failure) {
       // Koa unwinds a downstream throw through every awaiting middleware
@@ -74,7 +92,7 @@ function koaMiddleware(handle: SetupHandle) {
         requestId: rawId,
         startedAt,
         duration,
-        routePattern: (ctx as any)._matchedRoute,
+        routePattern,
         request: {
           method: ctx.method,
           url: fullUrl,
@@ -105,8 +123,6 @@ function koaMiddleware(handle: SetupHandle) {
         rawBody = undefined;
       }
     }
-
-    const routePattern = (ctx as any)._matchedRoute;
 
     const { fingerprint, recovery } = lookupErrorRecovery(engine, {
       request: { method: ctx.method, url: fullUrl, headers: reqHeaders },
@@ -167,6 +183,7 @@ function koaMiddleware(handle: SetupHandle) {
         project: setup.project,
       },
       errorFingerprint: fingerprint,
+      sampled: outcome === "stub",
     });
   };
 }

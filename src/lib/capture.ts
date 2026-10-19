@@ -16,11 +16,21 @@ import {
   type RedactOptions,
 } from "./redact.js";
 import { fingerprint, type Fingerprint } from "./fingerprint.js";
+import {
+  decide,
+  resolveMode,
+  samplingHash,
+  type NormalizedSampling,
+  type SamplingOutcome,
+} from "./sampling.js";
 
 export const MAX_BODY_BYTES = 256 * 1024;
 
-export interface EngineConfig extends Omit<UploaderConfig, "onResponse"> {
+export interface EngineConfig
+  extends Omit<UploaderConfig, "onResponse" | "samplingHash"> {
   redact?: RedactOptions;
+  /** Merged and validated by `normalizeSampling`. Absent means all "on". */
+  sampling?: NormalizedSampling;
 }
 
 /**
@@ -51,16 +61,82 @@ export class CaptureEngine {
   // no URL at all: there is no fallback, by design. One cold-start window.
   private cachedPortalUrl: string | undefined;
 
+  // Only set for a non-default config (SAMPLE-041). Without one, `sample()`
+  // is a constant "full" and nothing about sampling touches the wire.
+  private readonly sampling: NormalizedSampling | undefined;
+  private readonly samplingHash: string | undefined;
+  private samplingReport: "unsent" | "inflight" | "sent" = "unsent";
+
   constructor(cfg: EngineConfig) {
     this.blocklist = new Blocklist();
     this.enrichCache = new EnrichCache();
     this.recoveryCache = new RecoveryCache();
     this.redactOpts = cfg.redact || {};
+    const hash = cfg.sampling ? samplingHash(cfg.sampling) : null;
+    if (cfg.sampling && hash) {
+      this.sampling = cfg.sampling;
+      this.samplingHash = hash;
+    }
     this.uploader = new Uploader({
       ...cfg,
+      samplingHash: this.samplingHash,
       onResponse: (body, batchFingerprints) =>
         this.handleServerResponse(body, batchFingerprints),
     });
+  }
+
+  /**
+   * The sampling outcome for one request (CONTRACT.md SAMPLE-030). Adapters
+   * call this exactly once, when the status is final and before any SDK
+   * header goes out (SAMPLE-032), and act on the answer: `drop` means no
+   * id header, no injection and no `record()`; `stub` means record with
+   * `sampled: true`.
+   *
+   * Never throws. Anything unexpected sends the request in full
+   * (SAMPLE-035): sampling may only ever remove data, never break capture.
+   */
+  sample(
+    method: string,
+    routePattern: string | undefined,
+    status: number,
+  ): SamplingOutcome {
+    if (!this.sampling) return "full";
+    try {
+      this.reportSampling(false);
+      const mode = resolveMode(this.sampling, method, routePattern);
+      return decide(mode, status, Math.random());
+    } catch {
+      return "full";
+    }
+  }
+
+  /**
+   * Tell the ingest which config produced this process's uploads, so an
+   * "off" endpoint does not read as a dead one (SAMPLE-050..053). Once per
+   * process on the first decision; again only when the server asks.
+   */
+  private reportSampling(resend: boolean): void {
+    if (!this.sampling || !this.samplingHash) return;
+    if (this.samplingReport === "inflight") return;
+    if (this.samplingReport === "sent" && !resend) return;
+    this.samplingReport = "inflight";
+    const routes: Record<string, unknown> = {};
+    for (const key of [...this.sampling.routes.keys()].sort()) {
+      routes[key] = this.sampling.routes.get(key);
+    }
+    // 'sent' on failure too, deliberately (SAMPLE-051): a lost report is
+    // recovered when an upload response asks via needsSamplingConfig.
+    const done = () => {
+      this.samplingReport = "sent";
+    };
+    void this.uploader
+      .sendSamplingReport({
+        hash: this.samplingHash,
+        default: this.sampling.default,
+        routes,
+        creator: { name: "@restlessai/sdk", version: __SDK_VERSION__ },
+      })
+      .then(done, done);
   }
 
   setCallback(cb: SetupCallback) {
@@ -93,7 +169,10 @@ export class CaptureEngine {
       needsEnrichment?: unknown;
       recoveryMessages?: unknown;
       docsUrl?: unknown;
+      needsSamplingConfig?: unknown;
     };
+
+    if (obj.needsSamplingConfig === true) this.reportSampling(true);
 
     if (Array.isArray(obj.needsEnrichment)) {
       for (const key of obj.needsEnrichment) {
@@ -243,6 +322,16 @@ export class CaptureEngine {
 
   /** Redact + truncate, then enqueue. */
   record(captured: CapturedRequest) {
+    // A stub ships as if no body had been captured (SAMPLE-034). Dropping
+    // them here, before redaction, skips the parse work for exactly the
+    // requests the customer asked to send less of.
+    if (captured.sampled) {
+      captured = {
+        ...captured,
+        request: { ...captured.request, body: undefined },
+        response: { ...captured.response, body: undefined },
+      };
+    }
     const sanitized: CapturedRequest = {
       ...captured,
       request: {

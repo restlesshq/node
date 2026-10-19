@@ -82,6 +82,7 @@ async function restlessFastifyPlugin(fastify: any, handle: SetupHandle) {
       setup: null,
       reqHeaders,
       rawId,
+      idHeaderNames: Object.keys(idHeaders),
       fullUrl,
       error: null,
       startedAt: new Date().toISOString(),
@@ -131,11 +132,26 @@ async function restlessFastifyPlugin(fastify: any, handle: SetupHandle) {
       error: unknown;
       reqHeaders: Record<string, string>;
       rawId: string;
+      /** The id header stamped in onRequest, taken back on a drop. */
+      idHeaderNames: string[];
       fullUrl: string;
       startedAt: string;
       startTime: number;
     } | null;
     if (!state) return payload;
+
+    const rawPattern = req.routeOptions?.url as string | undefined;
+    const routePattern = rawPattern?.replace(/:(\w+)/g, "{$1}");
+
+    // onSend runs before anything is flushed, with the status final: the one
+    // point to decide (SAMPLE-032). A dropped request leaves no log, so it
+    // also leaves no id header pointing at one (SAMPLE-033).
+    const outcome = engine.sample(req.raw.method || "GET", routePattern, reply.statusCode);
+    if (outcome === "drop") {
+      for (const k of state.idHeaderNames) reply.removeHeader(k);
+      return payload;
+    }
+
     const setup: ResolvedSetup = state.setup || {};
     const stackTrace = errorStack(state.error);
 
@@ -144,9 +160,6 @@ async function restlessFastifyPlugin(fastify: any, handle: SetupHandle) {
     for (const [k, v] of Object.entries(reply.getHeaders())) {
       if (v) preResHeaders[k] = Array.isArray(v) ? v.join(", ") : String(v);
     }
-    const rawPattern = req.routeOptions?.url as string | undefined;
-    const routePattern = rawPattern?.replace(/:(\w+)/g, "{$1}");
-
     const { fingerprint, recovery } = lookupErrorRecovery(engine, {
       request: {
         method: req.raw.method || "GET",
@@ -210,6 +223,7 @@ async function restlessFastifyPlugin(fastify: any, handle: SetupHandle) {
       },
       stackTrace,
       errorFingerprint: fingerprint,
+      sampled: outcome === "stub",
     });
 
     return modified ?? payload;
