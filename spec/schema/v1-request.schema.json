@@ -26,6 +26,10 @@
           "description": "WIRE-017. Present only for status >= 400.",
           "$ref": "#/$defs/fingerprint"
         },
+        "sampled": {
+          "description": "WIRE-030. Present, and true, only on a sampled stub (SAMPLE-034), which carries no bodies.",
+          "const": true
+        },
         "group": { "$ref": "#/$defs/group" },
         "apiKey": {
           "description": "WIRE-014. Masked end-user key, or absent.",

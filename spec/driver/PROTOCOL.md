@@ -115,6 +115,26 @@ verified by each SDK's own unit tests, not by vectors.
 `CapturedRequest` is `{requestId, startedAt, duration, routePattern?,
 request: {method, url, headers, body?}, response: {status, headers, body?}}`.
 
+### Sampling
+
+| op | input | result |
+|---|---|---|
+| `samplingConfig` | `{settings?: any, code?: any}` | `{default: Mode, routes: [string, Mode][]}` |
+| `samplingMode` | `{settings?: any, code?: any, method: string, route?: string}` | `Mode` |
+| `samplingDecide` | `{mode: Mode, status: number, u: number}` | `"full"\|"stub"\|"drop"` |
+| `samplingHash` | `{settings?: any, code?: any}` | `{canonical: string\|null, hash: string\|null}` |
+
+`Mode` is `"on"`, `"off"`, `"errors"` or a number. `settings` and `code`
+are the raw configurations from the settings file and from code, passed
+verbatim and possibly invalid; every op that takes them merges and
+normalizes them first (CONTRACT.md SAMPLE-014). `samplingConfig` returns
+routes as `[key, mode]` pairs sorted by key, so the comparison pins the
+normalized keys without depending on object key order. Normalization
+warnings are debug output, not contract surface, and are not returned.
+
+There is deliberately no op that draws `u`: the output is random.
+SAMPLE-031 and SAMPLE-032 are verified by each SDK's own unit tests.
+
 ## Implementing a driver
 
 The driver should be a thin shell over the SDK's real internals. If it

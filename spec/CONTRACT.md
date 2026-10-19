@@ -1,6 +1,6 @@
 # Restless SDK Contract
 
-**Spec version:** 1.0.1
+**Spec version:** 1.1.0
 **Status:** Draft
 **Reference implementation:** `@restlessai/sdk` (this repository)
 
@@ -770,7 +770,8 @@ returned unchanged.
 **REQID-010** (MUST) Exactly one id header is emitted per response. If the
 incoming request already carried `x-request-id`, emit `x-restless-id`;
 otherwise emit `x-request-id`. An existing request-id chain is never
-clobbered.
+clobbered. A response whose sampling outcome is `drop` carries no id header
+(SAMPLE-033).
 
 **REQID-011** (MUST) When no API key resolved, the header value is the
 literal string `missing-key` instead of an id. The setup CLI keys off this
@@ -854,6 +855,7 @@ header would otherwise ship in the clear with no signal.
   "_id": "<raw uuid, no prefix>",
   "routePattern": "<templated route or absent>",
   "errorFingerprint": { "strategy": "...", "key": "...", "reason": "..." },
+  "sampled": true,
   "group": { "id": "...", "label": "", "emails": [] },
   "apiKey": "<masked end-user key or absent>",
   "projectId": "<owner id or absent>",
@@ -903,6 +905,9 @@ bearing: the wire name is coupled to the ingest's storage schema. Ports MUST
 use the user-facing name `owner` in their public API and the wire name
 `projectId` on the wire.
 
+**WIRE-030** (MUST) `sampled` is present, with the value `true`, only on a
+sampled stub (SAMPLE-034). It is absent, never `false`, on a full entry.
+
 Schema: `spec/schema/v1-request.schema.json`.
 Vectors: `spec/vectors/wire-payload.json`.
 
@@ -926,6 +931,9 @@ SDKs.
 
 **WIRE-024** (MUST) An unsuccessful upload (non-2xx) MUST NOT be retried
 and MUST NOT raise. The batch is dropped.
+
+**WIRE-025** (MUST) `needsSamplingConfig: true` triggers a re-send of the
+sampling report (SAMPLE-053).
 
 ---
 
@@ -969,7 +977,8 @@ Level 2. What the SDK adds to the customer's own responses.
 
 **INJECT-001** (MUST) The response headers (INJECT-002) are set on EVERY
 status. The `debug` body object (INJECT-003) is merged only when
-`status >= 400`.
+`status >= 400`. A response whose sampling outcome is `drop` gets neither
+(SAMPLE-033).
 
 **INJECT-002** (MUST) These response headers are set on every status:
 
@@ -1119,9 +1128,191 @@ silently apply the wrong redaction list.
 **CONFIG-014** (MUST) An explicitly named API that does not exist MUST
 raise, matching on `name` first and then `id`.
 
-**CONFIG-015** (MUST) Only two fields of the resolved entry are consumed at
-runtime: `requestIdPrefix` and `redact`. Everything else in the file
-belongs to the `restless` CLI.
+**CONFIG-015** (MUST) Only three fields of the resolved entry are consumed
+at runtime: `requestIdPrefix`, `redact` and `sampling` (section 12.1).
+Everything else in the file belongs to the `restless` CLI.
+
+### 12.1 Sampling (`SAMPLE`)
+
+Sampling lets a customer send less for high-traffic endpoints without
+losing the dashboard's counts or error grouping. Each request gets one
+**outcome**:
+
+- `full`: captured and uploaded exactly as without sampling.
+- `stub`: uploaded without request or response bodies, marked `sampled`.
+  Counts, latency, status mix and per-owner usage stay exact.
+- `drop`: nothing is uploaded and nothing is injected.
+
+The outcome is decided by the request's **mode**, which comes from the
+configuration.
+
+#### Modes
+
+**SAMPLE-001** (MUST) A mode is exactly one of the strings `"on"`, `"off"`,
+`"errors"`, or a JSON number in the closed range `[0, 1]` (a **rate**).
+String modes are case-sensitive.
+
+**SAMPLE-002** (MUST) A rate `r` is quantized on read to `k / 10000`, where
+`k = floor(r * 10000 + 0.5)`, computed in IEEE 754 double precision. When
+`k = 10000` the mode is `"on"`, so a rate of `1` has exactly one spelling.
+Use `floor(x + 0.5)`, not the language's `round`: Python's `round` rounds
+half to even.
+
+**SAMPLE-003** (MUST) An invalid mode (any other string, a number outside
+`[0, 1]`, a non-finite number, a numeric string, a boolean, `null`, or any
+other type) is treated as `"on"`. It MUST NOT raise; it SHOULD be reported
+under the debug flag. Falling back to `"on"` is deliberate: a typo must
+never silently stop logging.
+
+#### Configuration
+
+The configuration is an object with two optional members. It has the same
+shape in code and under an API entry's `sampling` key in
+`.restless/settings.json`:
+
+```json
+{ "default": "on", "routes": { "GET /health": "off", "* /pets/{id}": 0.1 } }
+```
+
+**SAMPLE-010** (MUST) A route key is `<METHOD> <path>`: optional leading
+and trailing U+0020, a method of one or more ASCII letters or the single
+character `*`, one or more U+0020, and a path. The path MUST start with `/`
+and, after SAMPLE-011, consist only of printable ASCII (U+0021 through
+U+007E). The method is uppercased (ASCII). `*` matches any method.
+
+Keys are restricted to printable ASCII so that every SDK sorts and hashes
+them (SAMPLE-040) byte-for-byte the same, without depending on its JSON
+encoder or its string model.
+
+**SAMPLE-011** (MUST) A path is normalized by, in order: replacing every
+`:` followed by one or more `WORD` characters (PRIM-001) with the same
+characters wrapped in `{` and `}` (`:id` becomes `{id}`); then removing
+trailing `/` characters while the path is longer than one character.
+
+**SAMPLE-012** (MUST) A key that does not satisfy SAMPLE-010 is ignored. It
+MUST NOT raise; it SHOULD be reported under the debug flag.
+
+**SAMPLE-013** (MUST) When two keys normalize to the same key, the one later
+in source order wins: settings before code (SAMPLE-014), and object order
+within one source (PRIM-031).
+
+**SAMPLE-014** (MUST) Settings-file and code configuration merge. A
+`default` given in code replaces the settings file's, and `routes` merge by
+normalized key, with code winning. With neither, the default is `"on"` and
+there are no routes, which is exactly the behaviour without sampling. A
+`sampling` value, or a `routes` value, that is not a JSON object is ignored
+without raising.
+
+#### Lookup
+
+**SAMPLE-020** (MUST) A request's mode is, in order: the route whose key is
+the request's method and route pattern; else the `*` route for that
+pattern; else `default`.
+
+**SAMPLE-021** (MUST) The request's route pattern is normalized by
+SAMPLE-011 before lookup, and its method is ASCII-uppercased. Adapters
+report patterns in different spellings (`/pets/{id}` from Express, Fastify
+and Next; `/pets/:id` from Koa and Hono), and both match the same key. A
+request with no route pattern, or one that does not satisfy SAMPLE-010
+after normalization, gets `default`.
+
+**SAMPLE-022** (MUST) Methods match exactly. There is no implicit mapping
+of `HEAD` to `GET`; a `*` key covers both.
+
+#### Decision
+
+**SAMPLE-030** (MUST) The outcome for a mode and a final response status:
+
+| mode | status < 400 | status >= 400 |
+|---|---|---|
+| `"on"` | `full` | `full` |
+| rate `r` | `full` if `u < r`, else `stub` | `full` |
+| `"errors"` | `drop` | `full` |
+| `"off"` | `drop` | `drop` |
+
+A request that threw with no response counts as status >= 400.
+
+**SAMPLE-031** (MUST) `u` is drawn uniformly from `[0, 1)`, independently
+per request. The comparison is strict: `u = r` is a `stub`, and a rate of
+`0` never sends a success in full. `u` need not come from a CSPRNG.
+
+**SAMPLE-032** (MUST) The decision is made once per request, at the point
+the response status is final and before any SDK header is emitted, and
+that single outcome governs both injection and upload. An SDK MUST NOT
+draw `u` twice for one request.
+
+**SAMPLE-033** (MUST) On `drop` the SDK emits no id header (REQID-010), no
+injected headers or `debug` object (INJECT-001), and uploads nothing.
+Pointing a caller at a log that will never exist is worse than pointing at
+none.
+
+**SAMPLE-034** (MUST) A `stub` is built exactly as a `full` entry for which
+no request or response body was captured (HAR-006, HAR-007, HAR-011), with
+`sampled: true` (WIRE-030). Headers are still captured and redacted, and
+the owner is still resolved: the setup callback runs for every request
+that is not dropped, so per-owner counts stay exact.
+
+**SAMPLE-035** (MUST) If deciding fails for any reason, the outcome is
+`full`. Sampling can only ever remove data the SDK would otherwise have
+sent; it never breaks capture (SAFETY-001).
+
+#### Reporting the configuration
+
+Without a report, an endpoint that is `"off"` looks the same on the
+dashboard as one that receives no traffic.
+
+**SAMPLE-040** (MUST) The **canonical form** of a merged configuration is
+UTF-8 text: the line `default<TAB><token>`, then one line
+`<key><TAB><token>` per route, sorted by the key's bytes ascending. Each
+line ends in a single LF (U+000A), including the last. `<token>` is the
+mode string for `"on"`, `"off"` and `"errors"`. For a rate it is `0.`
+followed by `k` (SAMPLE-002) as exactly four decimal digits, zero-padded
+(`0.1` is `0.1000`, `0.0001` is `0.0001`, `0` is `0.0000`), built from the
+integer `k` and never from float formatting. The **hash** is the
+lowercase-hex SHA-256 of the canonical form.
+
+**SAMPLE-041** (MUST) A configuration whose default is `"on"` and which has
+no routes is the **default configuration**. It has no canonical form and no
+hash, and SAMPLE-050 through SAMPLE-054 do not apply: an SDK without
+sampling configured sends nothing it did not send before.
+
+**SAMPLE-050** (MUST) The report is `POST <baseUrl>/v1/sampling` with the
+headers of WIRE-002 and WIRE-003 and this JSON body:
+
+```json
+{
+  "hash": "<SAMPLE-040 hash>",
+  "default": "on",
+  "routes": { "GET /health": "off", "* /pets/{id}": 0.1 },
+  "creator": { "name": "<sdk package name>", "version": "<sdk version>" }
+}
+```
+
+Keys are normalized (SAMPLE-010, SAMPLE-011) and modes quantized
+(SAMPLE-002). Schema: `spec/schema/v1-sampling.schema.json`.
+
+**SAMPLE-051** (MUST) The report is sent at most once per process (except
+under SAMPLE-053), asynchronously, triggered by the first request that
+reaches a sampling decision, whatever its outcome. It MUST NOT be sent at
+construction, so that scripts and tooling that build a client and never
+serve make no network call. It MUST NOT delay any response. Like an upload,
+it is not sent without a project key (BATCH-007) or under a test runner
+(BATCH-008), and a failure is swallowed without retry (SAFETY-004).
+
+**SAMPLE-052** (MUST) Every `/v1/request` upload carries the header
+`x-restless-sampling: <hash>`, so the ingest can tell which configuration
+produced the batch and whether it has seen that configuration.
+
+**SAMPLE-053** (MUST) On `needsSamplingConfig: true` in an upload response
+(WIRE-025), the SDK re-sends the report, unless a report is already in
+flight. This recovers from a lost first report and from ingest-side state
+loss.
+
+**SAMPLE-054** (NOTE) Under a configuration where every request is
+dropped, nothing is ever uploaded, so SAMPLE-053 cannot fire and the first
+report is the only one. That is accepted.
+
+Vectors: `spec/vectors/sampling.json`.
 
 ---
 
