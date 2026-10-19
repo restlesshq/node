@@ -124,9 +124,11 @@ export class CaptureEngine {
     for (const key of [...this.sampling.routes.keys()].sort()) {
       routes[key] = this.sampling.routes.get(key);
     }
-    // Fire and forget, and a failure is not retried (SAMPLE-051): the
-    // `x-restless-sampling` header on the next upload is how the server
-    // asks again if it never got this.
+    // 'sent' on failure too, deliberately (SAMPLE-051): a lost report is
+    // recovered when an upload response asks via needsSamplingConfig.
+    const done = () => {
+      this.samplingReport = "sent";
+    };
     void this.uploader
       .sendSamplingReport({
         hash: this.samplingHash,
@@ -134,9 +136,7 @@ export class CaptureEngine {
         routes,
         creator: { name: "@restlessai/sdk", version: __SDK_VERSION__ },
       })
-      .finally(() => {
-        this.samplingReport = "sent";
-      });
+      .then(done, done);
   }
 
   setCallback(cb: SetupCallback) {
