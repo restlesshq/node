@@ -211,7 +211,8 @@ export interface ClientOptions {
    * Send less for high-traffic endpoints. Each endpoint is `"on"` (the
    * default: everything in full), `"off"` (nothing), `"errors"` (only
    * status >= 400), or a rate in [0, 1]: that fraction of successful
-   * requests in full and the rest without bodies. Errors are never sampled.
+   * requests in full and the rest without bodies. Errors are always sent
+   * in full unless the route is "off".
    *
    *     sampling: {
    *       default: "on",

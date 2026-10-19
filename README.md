@@ -84,7 +84,7 @@ Full per-framework examples are in [`install.md`](./install.md).
   Every other framework wires itself up. Without it, an Express crash still logs, it just groups by the text of your error response instead of by throw site.
 
 - **Blocking.** Return `{ block: true }` from the setup callback to reject a request with a 403 before your handler runs. Blocked requests skip `enrich` entirely, so a banned tenant costs you no database lookups.
-- **Sampling.** Send less for noisy endpoints without losing your counts. Each endpoint is `"on"` (the default), `"off"`, `"errors"` (only status >= 400), or a rate such as `0.1`: that fraction of successful requests is logged in full and the rest without bodies, so counts, latency and per-customer usage stay exact. Errors are never sampled.
+- **Sampling.** Send less for noisy endpoints without losing your counts. Each endpoint is `"on"` (the default), `"off"`, `"errors"` (only status >= 400), or a rate such as `0.1`: that fraction of successful requests is logged in full and the rest without bodies, so counts, latency and per-customer usage stay exact. Errors are always logged in full, except on an `"off"` route.
 
   ```js
   restless(process.env.RESTLESS_KEY, {
@@ -95,7 +95,7 @@ Full per-framework examples are in [`install.md`](./install.md).
   });
   ```
 
-  Keys are a method (or `*` for any) and the route pattern your framework matched; `{id}` and `:id` are the same. The same `sampling` block can live in `.restless/settings.json`, and the code option wins per route. A request on an `"off"` route, or a success on an `"errors"` route, sends nothing and gets no `x-request-id` header. An invalid value never throws: it falls back to `"on"` and says so under `DEBUG=restless`.
+  Keys are a method (or `*` for any) and the route pattern your framework matched; `{id}` and `:id` are the same. The same `sampling` block can live in `.restless/settings.json`, and the code option wins per route. A request on an `"off"` route, or a success on an `"errors"` route, sends nothing and gets no `x-request-id` / `x-restless-id` or `x-debug` header. An invalid value never throws: it falls back to `"on"` and says so under `DEBUG=restless`.
 
 ## Environment variables
 

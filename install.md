@@ -387,7 +387,7 @@ Rules an installer should know:
 
 - Keys are `"<METHOD> <route pattern>"`, with `*` for any method. Use the pattern the framework matched (`/pets/{id}` or `/pets/:id`, both work), never a concrete URL like `/pets/42`. `HEAD` does not fall back to `GET`.
 - Only suggest `"off"` or `"errors"` for endpoints the user agrees are noise (health checks, readiness probes, polling). Never sample auth or payment endpoints without asking.
-- A request that sends nothing also gets no `x-request-id` header, so do not use an `"off"` route to verify the install.
+- A request that sends nothing also gets no `x-request-id` / `x-restless-id` or `x-debug` header, so do not use an `"off"` route to verify the install.
 
 ## 8. Request IDs
 
