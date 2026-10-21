@@ -215,6 +215,7 @@ for (const [name, drive] of Object.entries(DRIVERS)) {
       await out.flush();
       expect(hasIdHeader(out.headers)).toBe(false);
       expect(out.headers["x-debug"]).toBeUndefined();
+      expect(out.headers["x-api-feedback"]).toBeUndefined();
       expect(JSON.parse(out.body)).toEqual({ ok: true });
       expect(uploads).toEqual([]);
     });

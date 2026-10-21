@@ -1,6 +1,6 @@
 # Restless SDK Contract
 
-**Spec version:** 1.1.0
+**Spec version:** 1.2.0
 **Status:** Draft
 **Reference implementation:** `@restlessai/sdk` (this repository)
 
@@ -986,6 +986,9 @@ status. The `debug` body object (INJECT-003) is merged only when
   origin has been learned (INJECT-006)
 - `x-debug`: `npx api debug <displayRequestId>`, always set (it carries no
   URL, so nothing can make it unresolvable)
+- `x-api-feedback`: `npx api feedback <displayRequestId>`, always set (it
+  carries no URL, so nothing can make it unresolvable). `displayRequestId`
+  is the same `formatRequestId` value `x-debug` uses.
 
 **INJECT-003** (MUST) A `debug` object is merged into the response body
 ONLY when the body is a JSON object (not an array, not a scalar) and the
@@ -1014,10 +1017,11 @@ target and MUST NOT be used to build a log URL: it serves the ingest API
 only, so every such URL 404s.
 
 When no portal origin has been learned - a process that has not yet
-round-tripped a batch - the SDK MUST emit `x-debug` alone: no `x-log-url`,
-no `debug` object, no dig-in line. Emitting nothing is required rather than
-merely allowed, because a caller cannot distinguish a broken URL from a
-missing one, and one fetched 404 costs the convention its credibility.
+round-tripped a batch - the SDK MUST emit `x-debug` and `x-api-feedback`
+alone: no `x-log-url`, no `debug` object, no dig-in line. Emitting nothing
+is required rather than merely allowed, because a caller cannot distinguish
+a broken URL from a missing one, and one fetched 404 costs the convention
+its credibility.
 
 There is a one-batch cold-start window, and a one-batch staleness window
 after a portal-origin change; both are accepted.
@@ -1469,3 +1473,18 @@ or removes something a consumer or a peer could be relying on.
 `1.0.1` is the worked example: it changed which host the SDK injects and
 lifted the status gate on two headers, which is observable, but no SDK
 option, no method signature and no wire field moved.
+
+### 16.1 Changelog
+
+- **1.2.0** - INJECT-002 adds `x-api-feedback: npx api feedback
+  <displayRequestId>`, set on every status with no portal-origin
+  dependency; the two `inject/no-portal-*` vectors prove that. Minor under
+  CHANGE-005: no SDK option, method signature or wire field moves. An
+  existing conformant SDK does not yet satisfy the new requirement, and
+  CHANGE-005's "still satisfy" sentence can be read either way; this note
+  settles it as minor because nothing a consumer or peer relies on changed.
+- **1.1.0** - Adds sampling (section 12.1, `SAMPLE-*`) and the
+  `v1-sampling` schema.
+- **1.0.1** - The worked example in CHANGE-005: injected URLs moved to the
+  server-supplied portal origin (INJECT-006) and the status gate on
+  `x-log-url` / `x-debug` was lifted (INJECT-001).

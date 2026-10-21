@@ -197,6 +197,7 @@ describe("express adapter (one-liner)", () => {
     // The ingest origin is an upload target, never a log-URL host.
     expect(result.headers["x-log-url"]).not.toContain("localhost:3003");
     expect(result.headers["x-debug"]).toMatch(/npx api debug/);
+    expect(result.headers["x-api-feedback"]).toMatch(/npx api feedback/);
     const parsed = JSON.parse(result.body);
     expect(parsed.debug).toBeDefined();
     expect(parsed.debug.log).toMatch(/\/logs\//);
@@ -227,6 +228,7 @@ describe("express adapter (one-liner)", () => {
       /^https:\/\/acme\.restlessdocs\.com\/logs\//,
     );
     expect(result.headers["x-debug"]).toMatch(/npx api debug/);
+    expect(result.headers["x-api-feedback"]).toMatch(/npx api feedback/);
     // The body is the caller's data. Untouched.
     expect(JSON.parse(result.body)).toEqual({ hello: "world" });
     expect(JSON.parse(result.body)).toEqual({ hello: "world" });

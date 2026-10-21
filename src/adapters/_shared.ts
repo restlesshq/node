@@ -96,13 +96,16 @@ export function buildDebugInjection(args: {
 } {
   const display = formatRequestId(args.requestId, args.prefix);
   const debugCmd = `npx api debug ${display}`;
+  const feedbackCmd = `npx api feedback ${display}`;
 
-  // `x-debug` carries no URL, so it survives a missing portal origin.
-  if (!args.portalUrl) return { headers: { "x-debug": debugCmd } };
+  // Neither CLI header carries a URL, so both survive a missing portal
+  // origin (INJECT-002, INJECT-006).
+  const cliHeaders = { "x-debug": debugCmd, "x-api-feedback": feedbackCmd };
+  if (!args.portalUrl) return { headers: cliHeaders };
 
   const logUrl = `${args.portalUrl}/logs/${args.requestId}`;
   if (args.status < 400) {
-    return { headers: { "x-log-url": logUrl, "x-debug": debugCmd } };
+    return { headers: { "x-log-url": logUrl, ...cliHeaders } };
   }
 
   // Per-request "dig-in" URL the calling agent fetches for concrete next
@@ -121,10 +124,7 @@ export function buildDebugInjection(args: {
     : digInLine;
 
   return {
-    headers: {
-      "x-log-url": logUrl,
-      "x-debug": debugCmd,
-    },
+    headers: { "x-log-url": logUrl, ...cliHeaders },
     mutateJsonBody: (body: unknown) => {
       if (body && typeof body === "object" && !Array.isArray(body)) {
         const debug: Record<string, unknown> = {
