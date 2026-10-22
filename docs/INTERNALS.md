@@ -282,12 +282,15 @@ On **every captured** response we also add (a blocked response gets neither, for
 
 - `x-log-url`: deep link to the captured log
 - `x-debug`: the `npx api debug <id>` CLI invocation
+- `x-api-feedback`: the `npx api feedback <id>` CLI invocation, which files feedback against this exact request on the project's API Feedback page
 
 An agent that got a 200 it didn't expect has the same question as one that got a 500, and the header is the only place it can find the answer. On 4xx/5xx **only**, we additionally merge a `debug` object into JSON response bodies with the same links plus a recovery hint — a successful response body is the caller's data, not ours to reshape.
 
+Browser callers can only read these headers when the API names them in `Access-Control-Expose-Headers`, so a CORS'd API that wants agents in the browser to see them has to add `x-log-url, x-debug, x-api-feedback` there.
+
 Both URLs are built on the project's **portal origin**, learned from the server: every `/v1/request` upload response carries `docsUrl` (origin only, e.g. `https://docs.customer.com` or `https://<slug>.restlessdocs.com`), which the engine caches in-process and the adapters read when building the injection. The SDK never derives it.
 
-There is deliberately **no fallback**. `RESTLESS_BASE_URL` is an upload target: it serves the ingest API, so `<baseUrl>/logs/<id>` 404s. Until the first upload round-trips — a cold start, at most one batch — the SDK emits `x-debug` alone, with no `x-log-url`, no `debug` object and no dig-in line. A caller cannot tell a broken URL from a missing one, and one fetched 404 is enough to teach an agent to stop following the link at all. The same one-batch staleness window applies after a portal-origin change.
+There is deliberately **no fallback**. `RESTLESS_BASE_URL` is an upload target: it serves the ingest API, so `<baseUrl>/logs/<id>` 404s. Until the first upload round-trips — a cold start, at most one batch — the SDK emits `x-debug` and `x-api-feedback` alone, with no `x-log-url`, no `debug` object and no dig-in line. A caller cannot tell a broken URL from a missing one, and one fetched 404 is enough to teach an agent to stop following the link at all. The same one-batch staleness window applies after a portal-origin change.
 
 ## Blocking
 
@@ -369,7 +372,7 @@ If `RESTLESS_KEY` (and `README_API_KEY`) are both unset when `restless()` is cal
 - **Setup callback throws:** caught, falls back to the `.restless/settings.json` defaults for the request.
 - **Malformed `.restless/settings.json`:** returns `null` from the loader → no auto-config, no crash.
 - **Non-serializable request body:** the adapters that read an already-parsed body (Fastify `req.body`, Koa `ctx.request.body`) serialize it defensively. `multipart/form-data` bodies are skipped (a stringified parsed multipart body is meaningless), and any body that `JSON.stringify` can't handle - e.g. the circular structures `@fastify/multipart`'s `attachFieldsToBody` produces - is dropped to no recorded body rather than throwing. The Express/Hono/Next/http adapters capture the raw request stream, so they're unaffected.
-- **Headers already sent (Express / http):** a handler that calls `res.write()` or `res.flushHeaders()` before `res.end()` has put the headers, and part of the body, on the wire before the SDK can add anything. The response then goes out without `x-log-url`, `x-debug` or the `debug` body object, and is still logged as sent. The id header is unaffected: it is set before the handler runs.
+- **Headers already sent (Express / http):** a handler that calls `res.write()` or `res.flushHeaders()` before `res.end()` has put the headers, and part of the body, on the wire before the SDK can add anything. The response then goes out without `x-log-url`, `x-debug`, `x-api-feedback` or the `debug` body object, and is still logged as sent. The id header is unaffected: it is set before the handler runs.
 - **Handler throws:** logged, fingerprinted by throw site, and re-thrown unchanged. See "Where the stack comes from" above; on Express this needs `app.use(restless.errorHandler)`.
 
 The overriding principle: observability never takes down the request path.

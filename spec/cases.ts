@@ -496,7 +496,7 @@ export const INJECTION_CASES: CaseDef[] = [
     input: { status: 500, requestId: INJECT_ID, portalUrl: PORTAL, method: "POST", path: "/orders" } },
   { id: "inject/no-portal-2xx", requirement: "INJECT-006", op: "debugInjection",
     input: { status: 200, requestId: INJECT_ID },
-    note: "No portal origin: x-debug only, and never a URL on the ingest host." },
+    note: "No portal origin: the two CLI headers only, and never a URL on the ingest host." },
   { id: "inject/no-portal-4xx", requirement: "INJECT-006", op: "debugInjection",
     input: { status: 404, requestId: INJECT_ID, method: "GET", path: "/car/{id}" },
     note: "No portal origin means no debug object at all, so no dig-in line." },

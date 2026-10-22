@@ -387,7 +387,7 @@ Rules an installer should know:
 
 - Keys are `"<METHOD> <route pattern>"`, with `*` for any method. Use the pattern the framework matched (`/pets/{id}` or `/pets/:id`, both work), never a concrete URL like `/pets/42`. `HEAD` does not fall back to `GET`.
 - Only suggest `"off"` or `"errors"` for endpoints the user agrees are noise (health checks, readiness probes, polling). Never sample auth or payment endpoints without asking.
-- A request that sends nothing also gets no `x-request-id` / `x-restless-id` or `x-debug` header, so do not use an `"off"` route to verify the install.
+- A request that sends nothing also gets no `x-request-id` / `x-restless-id`, `x-debug` or `x-api-feedback` header, so do not use an `"off"` route to verify the install.
 
 ## 8. Request IDs
 
@@ -403,10 +403,12 @@ Rules an installer should know:
 
 The SDK adds debug info to make error triage trivial:
 
-- Response headers, on **every** status of a captured response (so not on a blocked one - see §10): `x-log-url: <portalOrigin>/logs/<id>`, `x-debug: npx api debug <id>`
+- Response headers, on **every** status of a captured response (so not on a blocked one - see §10): `x-log-url: <portalOrigin>/logs/<id>`, `x-debug: npx api debug <id>`, `x-api-feedback: npx api feedback <id>`
 - Response body, only on status **>= 400** and only when `content-type: application/json`: a `debug: { log, cli, recovery }` key merged into the top-level object
 
-`<portalOrigin>` is your project's public docs host, which the server tells the SDK on each upload. Until the first upload round-trips (a few requests at most), `x-log-url` is omitted rather than guessed: a URL that 404s is worse than no URL. The ingest host is never used for these links.
+`<portalOrigin>` is your project's public docs host, which the server tells the SDK on each upload. Until the first upload round-trips (a few requests at most), `x-log-url` is omitted rather than guessed: a URL that 404s is worse than no URL. The ingest host is never used for these links. `x-debug` and `x-api-feedback` carry no URL, so they are present from the very first response.
+
+Browser callers only see these headers if the API lists them in `Access-Control-Expose-Headers` (for example `x-log-url, x-debug, x-api-feedback`); same-origin and server-side callers see them without it.
 
 There is NO user-configurable `modifyBody` or `headers` hook. Don't look for one; it was intentionally removed from the API.
 
@@ -420,7 +422,7 @@ restless.setup((req) => {
 });
 ```
 
-The handler never runs for blocked requests, and the block response is written before the id header is stamped: under Express, Koa, Hono and bare http it carries no `x-request-id` / `x-restless-id` and no `x-debug`. Two adapters do stamp it - Fastify, whose `onRequest` hook runs before the block, and Next.js, which sets it on the block response explicitly. No request is recorded either, again except under Fastify, where the response hook still fires and the block is logged. `owner.enrich` is not called for a blocked request - see §4.
+The handler never runs for blocked requests, and the block response is written before the id header is stamped: under Express, Koa, Hono and bare http it carries no `x-request-id` / `x-restless-id`, no `x-debug` and no `x-api-feedback`. Two adapters do stamp it - Fastify, whose `onRequest` hook runs before the block, and Next.js, which sets it on the block response explicitly. No request is recorded either, again except under Fastify, where the response hook still fires and the block is logged. `owner.enrich` is not called for a blocked request - see §4.
 
 ## 10a. Uncaught handler errors
 

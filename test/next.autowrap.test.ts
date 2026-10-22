@@ -375,6 +375,7 @@ describe("error debug injection still applies through wrapRouteHandler", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("x-log-url")).toContain(`${PORTAL}/logs/`);
     expect(res.headers.get("x-debug")).toContain("npx api debug");
+    expect(res.headers.get("x-api-feedback")).toContain("npx api feedback");
     expect(await res.json()).toEqual({ hello: "world" });
   });
 
@@ -389,6 +390,7 @@ describe("error debug injection still applies through wrapRouteHandler", () => {
     // apart, and a dead fetch costs it the whole convention.
     expect(res.headers.get("x-log-url")).toBeNull();
     expect(res.headers.get("x-debug")).toContain("npx api debug");
+    expect(res.headers.get("x-api-feedback")).toContain("npx api feedback");
     const body = await res.json();
     expect(body.debug).toBeUndefined();
   });

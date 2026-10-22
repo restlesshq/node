@@ -18,11 +18,12 @@ describe("buildDebugInjection", () => {
     });
     expect(d.headers["x-log-url"]).toBe(`${PORTAL}/logs/abc`);
     expect(d.headers["x-debug"]).toBe("npx api debug abc");
+    expect(d.headers["x-api-feedback"]).toBe("npx api feedback abc");
     // A successful response body is the caller's data, not ours to reshape.
     expect(d.mutateJsonBody).toBeUndefined();
   });
 
-  it("adds x-log-url and x-debug on 4xx", () => {
+  it("adds x-log-url, x-debug and x-api-feedback on 4xx", () => {
     const d = buildDebugInjection({
       status: 404,
       requestId: "abc",
@@ -30,6 +31,20 @@ describe("buildDebugInjection", () => {
     });
     expect(d.headers["x-log-url"]).toBe(`${PORTAL}/logs/abc`);
     expect(d.headers["x-debug"]).toBe("npx api debug abc");
+    expect(d.headers["x-api-feedback"]).toBe("npx api feedback abc");
+  });
+
+  it("prefixes both CLI hints the same way", () => {
+    const d = buildDebugInjection({
+      status: 500,
+      requestId: "abc",
+      prefix: "TST",
+      portalUrl: PORTAL,
+    });
+    expect(d.headers["x-debug"]).toBe("npx api debug TST-abc");
+    expect(d.headers["x-api-feedback"]).toBe("npx api feedback TST-abc");
+    // The URL keeps the raw id; only the CLI hints carry the prefix.
+    expect(d.headers["x-log-url"]).toBe(`${PORTAL}/logs/abc`);
   });
 
   it("emits no URL at all when no portal origin is known", () => {
@@ -40,8 +55,9 @@ describe("buildDebugInjection", () => {
         method: "GET",
         path: "/car/{id}",
       });
-      // `x-debug` carries no URL, so it survives.
+      // Neither CLI header carries a URL, so both survive.
       expect(d.headers["x-debug"]).toBe("npx api debug abc");
+      expect(d.headers["x-api-feedback"]).toBe("npx api feedback abc");
       expect(d.headers["x-log-url"]).toBeUndefined();
       expect(d.mutateJsonBody).toBeUndefined();
     }
