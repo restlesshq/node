@@ -505,3 +505,214 @@ describe("SAFETY-007: request-body capture ceiling", () => {
     expect(text).not.toContain("hunter2hunter2");
   });
 });
+
+/**
+ * Express sets these on `req` after routing. `route.path` is whatever the
+ * route was registered with; `baseUrl` is the matched mount URL; `path` is
+ * relative to the mount.
+ */
+type Routed = {
+  route?: { path?: unknown };
+  baseUrl?: string;
+  path?: string;
+  params?: Record<string, string>;
+};
+
+async function routed(
+  routing: Routed,
+  url: string,
+  opts: { sampling?: any; handler?: (res: http.ServerResponse) => void } = {},
+) {
+  const { uploads, fetchImpl } = bodyCollector();
+  const restless = restlessExpress("rdme_test", {
+    baseUrl: "http://localhost:3003",
+    fetch: fetchImpl,
+    sampling: opts.sampling,
+  });
+  const mw = restless.setup(() => ({}));
+  const result = await run(
+    mw,
+    (req, res) => {
+      Object.assign(req, routing);
+      if (opts.handler) return opts.handler(res);
+      res.setHeader("content-type", "application/json");
+      res.end('{"ok":true}');
+    },
+    { method: "GET", path: url },
+  );
+  await restless.flush();
+  return { result, uploads };
+}
+
+describe("route patterns", () => {
+  beforeEach(() => _resetSettingsCache());
+
+  describe("array and RegExp route paths (RES-18)", () => {
+    it("reports the array entry the request matched", async () => {
+      const { result, uploads } = await routed(
+        { route: { path: ["/ping", "/ping/:tag"] }, path: "/ping/abc" },
+        "/ping/abc",
+      );
+      expect(result.status).toBe(200);
+      expect(uploads).toHaveLength(1);
+      expect(uploads[0].routePattern).toBe("/ping/{tag}");
+    });
+
+    it("matches array entries the way Express does", async () => {
+      const { uploads } = await routed(
+        { route: { path: ["/ping", "/ping/:tag"] }, path: "/PING/" },
+        "/PING/",
+      );
+      expect(uploads[0].routePattern).toBe("/ping");
+    });
+
+    it("reports no pattern when no plain array entry matches", async () => {
+      const { result, uploads } = await routed(
+        { route: { path: ["/a/:id?", /^\/b/] }, path: "/a" },
+        "/a",
+      );
+      expect(result.status).toBe(200);
+      expect(uploads).toHaveLength(1);
+      expect(uploads[0].routePattern).toBeUndefined();
+    });
+
+    it("reports no pattern for a RegExp path and still logs", async () => {
+      const { result, uploads } = await routed(
+        { route: { path: /^\/ping/ }, path: "/ping" },
+        "/ping",
+      );
+      expect(result.status).toBe(200);
+      expect(result.body).toBe('{"ok":true}');
+      expect(uploads).toHaveLength(1);
+      expect(uploads[0].routePattern).toBeUndefined();
+    });
+
+    it("applies a sampling rule to the matched array entry", async () => {
+      const { result, uploads } = await routed(
+        { route: { path: ["/ping", "/ping/:tag"] }, path: "/ping/abc" },
+        "/ping/abc",
+        { sampling: { routes: { "GET /ping/{tag}": "off" } } },
+      );
+      expect(result.status).toBe(200);
+      expect(result.headers["x-request-id"]).toBeUndefined();
+      expect(uploads).toEqual([]);
+    });
+
+    it("falls back to the default sampling mode for a RegExp path", async () => {
+      const { result, uploads } = await routed(
+        { route: { path: /^\/ping/ }, path: "/ping" },
+        "/ping",
+        { sampling: { default: "off" } },
+      );
+      expect(result.status).toBe(200);
+      expect(uploads).toEqual([]);
+    });
+
+    it("survives a RegExp path when the handler streams", async () => {
+      const { result, uploads } = await routed(
+        { route: { path: /^\/stream/ }, path: "/stream" },
+        "/stream",
+        {
+          sampling: { default: "on" },
+          handler: (res) => {
+            res.write("a");
+            res.end("b");
+          },
+        },
+      );
+      expect(result.body).toBe("ab");
+      expect(uploads).toHaveLength(1);
+    });
+  });
+
+  describe("router mount prefix (RES-19)", () => {
+    it("puts req.baseUrl in front of the route", async () => {
+      const { uploads } = await routed(
+        { route: { path: "/shipments/:id" }, baseUrl: "/v1", path: "/shipments/7" },
+        "/v1/shipments/7",
+      );
+      expect(uploads[0].routePattern).toBe("/v1/shipments/{id}");
+    });
+
+    it("joins a nested mount and a root route without a trailing slash", async () => {
+      const { uploads } = await routed(
+        { route: { path: "/" }, baseUrl: "/v1/shipments", path: "/" },
+        "/v1/shipments",
+      );
+      expect(uploads[0].routePattern).toBe("/v1/shipments");
+    });
+
+    it("templates mount params back from req.params", async () => {
+      const { uploads } = await routed(
+        {
+          route: { path: "/posts/:pid" },
+          baseUrl: "/users/42",
+          path: "/posts/42",
+          params: { uid: "42", pid: "42" },
+        },
+        "/users/42/posts/42",
+      );
+      expect(uploads[0].routePattern).toBe("/users/{uid}/posts/{pid}");
+    });
+
+    it("puts the mount in front of a matched array entry", async () => {
+      const { uploads } = await routed(
+        { route: { path: ["/ping", "/ping/:tag"] }, baseUrl: "/v1", path: "/ping" },
+        "/v1/ping",
+      );
+      expect(uploads[0].routePattern).toBe("/v1/ping");
+    });
+
+    it("matches a sampling rule written with the full path", async () => {
+      const { uploads } = await routed(
+        { route: { path: "/health" }, baseUrl: "/v1", path: "/health" },
+        "/v1/health",
+        { sampling: { routes: { "GET /v1/health": "off" } } },
+      );
+      expect(uploads).toEqual([]);
+    });
+  });
+
+  describe("SAFETY-001: the SDK never breaks the response", () => {
+    it("logs without a pattern when reading req.route throws", async () => {
+      const { result, uploads } = await routed(
+        {},
+        "/x",
+        {
+          handler: (res) => {
+            Object.defineProperty(res.req, "route", {
+              get() {
+                throw new Error("boom");
+              },
+            });
+            res.end("ok");
+          },
+        },
+      );
+      expect(result.status).toBe(200);
+      expect(result.body).toBe("ok");
+      expect(uploads).toHaveLength(1);
+      expect(uploads[0].routePattern).toBeUndefined();
+    });
+
+    it("sends the handler's response when capture throws at res.end", async () => {
+      const { result, uploads } = await routed(
+        {},
+        "/x",
+        {
+          handler: (res) => {
+            res.setHeader("content-type", "application/json");
+            res.statusCode = 404;
+            res.getHeaders = () => {
+              throw new Error("boom");
+            };
+            res.end('{"error":"nope"}');
+          },
+        },
+      );
+      expect(result.status).toBe(404);
+      expect(result.body).toBe('{"error":"nope"}');
+      expect(uploads).toEqual([]);
+    });
+  });
+});
