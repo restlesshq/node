@@ -95,29 +95,37 @@ function matchesRoute(route: string, path: unknown): boolean {
  * `/users/42` back to `/users/:uid`, using the params the route was handed.
  * Params the route itself declares are skipped: their values come from the
  * part of the URL after the mount.
+ *
+ * A heuristic, since Express never exposes the mount pattern itself: each
+ * param claims the leftmost unclaimed segment holding its value, taking
+ * params in Express's merge order (parent mounts first). That gets
+ * `/:tenant/v1` at `/v1/v1` and `/users/:uid/orgs/:oid` at
+ * `/users/42/orgs/42` right, but templates the wrong segment when a
+ * literal to the left holds the same value (`/v1/:id` at `/v1/v1` gives
+ * `/:id/v1`). Numeric names (unnamed regex groups) are skipped: JS orders
+ * them first, out of URL order.
  */
 function templateMount(baseUrl: string, params: unknown, route: string) {
   if (!params || typeof params !== "object") return baseUrl;
   const own = new Set([...route.matchAll(/:(\w+)/g)].map((m) => m[1]));
-  const byValue = new Map<string, string>();
+  const segs = baseUrl.split("/");
+  const decoded = segs.map((seg) => {
+    try {
+      return decodeURIComponent(seg);
+    } catch {
+      return seg; // malformed escape: compare it raw
+    }
+  });
+  const claimed = new Set<number>();
   for (const [name, value] of Object.entries(params)) {
-    if (own.has(name) || typeof value !== "string" || value === "") continue;
-    if (!byValue.has(value)) byValue.set(value, name);
+    if (own.has(name) || /^\d+$/.test(name)) continue;
+    if (typeof value !== "string" || value === "") continue;
+    const i = decoded.findIndex((d, j) => d === value && !claimed.has(j));
+    if (i === -1) continue;
+    claimed.add(i);
+    segs[i] = `:${name}`;
   }
-  if (byValue.size === 0) return baseUrl;
-  return baseUrl
-    .split("/")
-    .map((seg) => {
-      let decoded = seg;
-      try {
-        decoded = decodeURIComponent(seg);
-      } catch {
-        /* malformed escape: compare it raw */
-      }
-      const name = byValue.get(decoded);
-      return name === undefined ? seg : `:${name}`;
-    })
-    .join("/");
+  return segs.join("/");
 }
 
 /** The raw middleware — used internally and exposed for advanced wiring. */

@@ -655,6 +655,28 @@ describe("route patterns", () => {
       expect(uploads[0].routePattern).toBe("/users/{uid}/posts/{pid}");
     });
 
+    it("templates only the segment a mount param came from", async () => {
+      // app.use('/:tenant/v1', r) at /v1/v1: the literal v1 stays.
+      const { uploads } = await routed(
+        { route: { path: "/x" }, baseUrl: "/v1/v1", path: "/x", params: { tenant: "v1" } },
+        "/v1/v1/x",
+      );
+      expect(uploads[0].routePattern).toBe("/{tenant}/v1/x");
+    });
+
+    it("templates two mount params that share a value", async () => {
+      const { uploads } = await routed(
+        {
+          route: { path: "/" },
+          baseUrl: "/users/42/orgs/42",
+          path: "/",
+          params: { uid: "42", oid: "42" },
+        },
+        "/users/42/orgs/42",
+      );
+      expect(uploads[0].routePattern).toBe("/users/{uid}/orgs/{oid}");
+    });
+
     it("puts the mount in front of a matched array entry", async () => {
       const { uploads } = await routed(
         { route: { path: ["/ping", "/ping/:tag"] }, baseUrl: "/v1", path: "/ping" },
