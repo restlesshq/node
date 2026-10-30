@@ -948,8 +948,10 @@ non-2xx statuses including `502` and `504`, timeouts, and connections lost
 after the request was sent. The ingest may already have stored the batch,
 it does not deduplicate entries, and a resend would double them.
 
-**WIRE-028** (MUST) An upload that has not completed within **10 s** is
-abandoned. It is a failure under WIRE-027, not a retry.
+**WIRE-028** (MUST) An upload attempt that has not completed within
+**10 s** is abandoned. It is a failure under WIRE-027, not a retry. Each
+retry gets its own 10 s. Where the platform's HTTP client cannot bound a
+whole request, a 10 s limit on each connect and read is acceptable.
 
 ---
 
@@ -1433,6 +1435,15 @@ document its own choices; none of it is compared for conformance.
   ecosystem's convention, or omit it.
 - **Build-time and bundler integration.** Node's Next.js auto-wrap
   (loader plus plugin) has no cross-language analogue.
+- **Forking servers.** Under a pre-fork server (Puma, Unicorn, Gunicorn)
+  the queue and upload workers do not survive into the child. A port SHOULD
+  give each child a fresh uploader and drop the entries it inherited, since
+  the parent still owns and sends them.
+- **Test transport hooks.** A port MAY let tests swap the HTTP call. It
+  SHOULD give that hook an idiomatic way to report a non-2xx status and
+  `Retry-After` (an exception in Python, an error value in Go), so a
+  swapped transport can exercise WIRE-026. A hook that doesn't is never
+  retried.
 
 ---
 
