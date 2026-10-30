@@ -27,6 +27,107 @@ import {
 } from "../lib/adapterFactory.js";
 import type { SamplingOutcome } from "../lib/sampling.js";
 
+/**
+ * The templated route Express matched, mount prefix included, or undefined
+ * when there is none to report. Never throws.
+ *
+ * `req.route.path` is whatever the route was registered with: a string, an
+ * array of them, or a RegExp. An array reports the entry this request
+ * matched; a RegExp has no template, so it reports none rather than a
+ * concrete path (CONTRACT.md, "Where the route pattern comes from").
+ *
+ * `req.route.path` is relative to the router it was registered on, so the
+ * mount path in `req.baseUrl` goes in front. `req.baseUrl` is the matched
+ * URL, not the mount pattern: `app.use('/users/:uid', r)` gives
+ * `/users/42`. Mount params are templated back from `req.params`, which
+ * holds them when the router uses `mergeParams` (as it must to read them).
+ */
+function expressRoutePattern(req: unknown): string | undefined {
+  try {
+    const r = req as {
+      route?: { path?: unknown };
+      baseUrl?: unknown;
+      path?: unknown;
+      params?: unknown;
+    };
+    const registered = r.route?.path;
+    const route =
+      typeof registered === "string"
+        ? registered
+        : Array.isArray(registered)
+          ? registered.find(
+              (p): p is string =>
+                typeof p === "string" && matchesRoute(p, r.path),
+            )
+          : undefined;
+    if (route === undefined) return undefined;
+
+    const base =
+      typeof r.baseUrl === "string" && r.baseUrl !== ""
+        ? templateMount(r.baseUrl, r.params, route)
+        : "";
+    const full = base && route === "/" ? base : base + route;
+    return full.replace(/:(\w+)/g, "{$1}");
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Whether `path` matches a plain route made of literal and `:param`
+ * segments, the way Express does by default (case-insensitive, trailing
+ * slash optional). Anything fancier (`?`, `*`, `(regex)`) is not matched,
+ * so it reports no pattern rather than the wrong one.
+ */
+function matchesRoute(route: string, path: unknown): boolean {
+  if (typeof path !== "string") return false;
+  const want = route.replace(/\/+$/, "").split("/");
+  const got = path.replace(/\/+$/, "").split("/");
+  if (want.length !== got.length) return false;
+  return want.every((seg, i) =>
+    /^:\w+$/.test(seg)
+      ? got[i] !== ""
+      : seg.toLowerCase() === got[i].toLowerCase(),
+  );
+}
+
+/**
+ * `/users/42` back to `/users/:uid`, using the params the route was handed.
+ * Params the route itself declares are skipped: their values come from the
+ * part of the URL after the mount.
+ *
+ * A heuristic, since Express never exposes the mount pattern itself: each
+ * param claims the leftmost unclaimed segment holding its value, taking
+ * params in Express's merge order (parent mounts first). That gets
+ * `/:tenant/v1` at `/v1/v1` and `/users/:uid/orgs/:oid` at
+ * `/users/42/orgs/42` right, but templates the wrong segment when a
+ * literal to the left holds the same value (`/v1/:id` at `/v1/v1` gives
+ * `/:id/v1`). Numeric names (unnamed regex groups) are skipped: JS orders
+ * them first, out of URL order.
+ */
+function templateMount(baseUrl: string, params: unknown, route: string) {
+  if (!params || typeof params !== "object") return baseUrl;
+  const own = new Set([...route.matchAll(/:(\w+)/g)].map((m) => m[1]));
+  const segs = baseUrl.split("/");
+  const decoded = segs.map((seg) => {
+    try {
+      return decodeURIComponent(seg);
+    } catch {
+      return seg; // malformed escape: compare it raw
+    }
+  });
+  const claimed = new Set<number>();
+  for (const [name, value] of Object.entries(params)) {
+    if (own.has(name) || /^\d+$/.test(name)) continue;
+    if (typeof value !== "string" || value === "") continue;
+    const i = decoded.findIndex((d, j) => d === value && !claimed.has(j));
+    if (i === -1) continue;
+    claimed.add(i);
+    segs[i] = `:${name}`;
+  }
+  return segs.join("/");
+}
+
 /** The raw middleware — used internally and exposed for advanced wiring. */
 function expressMiddleware(handle: SetupHandle) {
   if (!isSetupHandle(handle)) {
@@ -143,11 +244,7 @@ function expressMiddleware(handle: SetupHandle) {
     const startTime = Date.now();
 
     // Express has matched the route by the time anything is written.
-    const routeOf = () =>
-      (req as unknown as { route?: { path?: string } }).route?.path?.replace(
-        /:(\w+)/g,
-        "{$1}",
-      );
+    const routeOf = () => expressRoutePattern(req);
 
     // One sampling decision per request (SAMPLE-032), taken the first time
     // the status is final: in writeHead when the handler streams (res.write
@@ -199,7 +296,13 @@ function expressMiddleware(handle: SetupHandle) {
       statusCode: unknown,
       ...args: unknown[]
     ) {
-      decideOnce(typeof statusCode === "number" ? statusCode : res.statusCode);
+      try {
+        decideOnce(
+          typeof statusCode === "number" ? statusCode : res.statusCode,
+        );
+      } catch {
+        /* SAFETY-001: res.end decides again, or logs nothing */
+      }
       return (origWriteHead as Function).apply(res, [statusCode, ...args]);
     };
 
@@ -211,15 +314,15 @@ function expressMiddleware(handle: SetupHandle) {
       return (origWrite as Function).apply(res, [chunk, ...args]);
     };
 
-    (res as unknown as { end: unknown }).end = function (
-      chunk: unknown,
-      ...args: unknown[]
-    ) {
+    // Everything the SDK does at res.end, returning the chunk to send in
+    // place of the handler's. Kept apart from the patched res.end below so
+    // a throw anywhere in here is fenced off from the response.
+    const finishCapture = (chunk: unknown): unknown => {
       // Dropped: no log, so no debug headers pointing at one, and the body
       // goes out exactly as the handler wrote it.
       if (decideOnce(res.statusCode) === "drop") {
         state.recorded = true;
-        return (origEnd as Function).apply(res, [chunk, ...args]);
+        return chunk;
       }
 
       if (chunk) resChunks.push(Buffer.from(chunk as Buffer));
@@ -295,13 +398,6 @@ function expressMiddleware(handle: SetupHandle) {
             debug.mutateJsonBody,
           );
 
-      // If we rewrote the body, Content-Length was already set to the
-      // pre-injection length by res.json()/res.send(). Update it so the
-      // client doesn't truncate the stream mid-JSON.
-      if (modified !== rawBody && modified !== undefined && !res.headersSent) {
-        res.setHeader("content-length", Buffer.byteLength(modified));
-      }
-
       // Guarded: a handler that both threw and (partially) responded, or
       // that calls res.end twice, must still produce exactly one log.
       if (!state.recorded) {
@@ -327,8 +423,29 @@ function expressMiddleware(handle: SetupHandle) {
         });
       }
 
-      const finalChunk = modified !== rawBody ? modified : chunk;
-      return (origEnd as Function).apply(res, [finalChunk, ...args]);
+      if (modified === rawBody) return chunk;
+      // Content-Length was already set to the pre-injection length by
+      // res.json()/res.send(). Update it so the client doesn't truncate the
+      // stream mid-JSON. Last, so nothing after it can throw and send the
+      // original chunk under the new length.
+      if (modified !== undefined && !res.headersSent) {
+        res.setHeader("content-length", Buffer.byteLength(modified));
+      }
+      return modified;
+    };
+
+    (res as unknown as { end: unknown }).end = function (
+      chunk: unknown,
+      ...args: unknown[]
+    ) {
+      let out = chunk;
+      try {
+        out = finishCapture(chunk);
+      } catch {
+        // SAFETY-001: an SDK failure costs the log, never the response.
+        state.recorded = true;
+      }
+      return (origEnd as Function).apply(res, [out, ...args]);
     };
 
     next();

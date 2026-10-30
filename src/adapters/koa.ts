@@ -64,7 +64,10 @@ function koaMiddleware(handle: SetupHandle) {
     }
 
     const duration = Date.now() - startTime;
-    const routePattern = (ctx as any)._matchedRoute as string | undefined;
+    // @koa/router sets this to the path the route was registered with,
+    // which can be a RegExp: that has no template to report.
+    const matched = (ctx as any)._matchedRoute as unknown;
+    const routePattern = typeof matched === "string" ? matched : undefined;
 
     // One decision per request (SAMPLE-032). Koa has not written anything
     // yet, either way: it responds after the middleware stack unwinds.
