@@ -1,0 +1,51 @@
+name: Publish
+
+# Pushing a tag like v0.7.0 publishes that version to npm. Authentication is npm
+# trusted publishing (OIDC): no token is stored, and each release gets provenance.
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+  # Mints the OIDC token npm exchanges for a short-lived publish credential.
+  id-token: write
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The full history, so the tag can be checked against main.
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      # Trusted publishing needs npm 11.5.1 or later.
+      - run: npm install -g npm@11
+      - name: Check the tag matches package.json and is on main
+        run: |
+          version=$(node -p "require('./package.json').version")
+          if [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match package.json version ${version} (expected v${version})."
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "${GITHUB_SHA}" origin/main; then
+            echo "::error::${GITHUB_REF_NAME} points at a commit that is not on main."
+            exit 1
+          fi
+      - run: npm ci --no-audit --no-fund
+      - run: npm run typecheck
+      # Build before testing so the built CJS checks run instead of skipping.
+      - run: npm run build
+      - run: npm test
+      - run: npm run spec:conformance
+      # prepublishOnly rebuilds dist, so the tarball always matches this commit.
+      - run: npm publish
