@@ -454,8 +454,11 @@ Hardcoded behavior, no config:
 - Flush interval: 5000 ms
 - Queue cap: 1000 entries (drops oldest on overflow)
 - Localhost base URL: flushes every push (instant dev feedback)
+- At most 4 uploads in flight; while capped, each freed slot sends up to 100 queued entries
+- Upload timeout: 10 s
+- Retries: only `503`/`429` (honouring `Retry-After`, max 2 retries, max 10 s wait) and connections that never reached the ingest. Never `502`/`504`/timeouts, which the ingest may already have stored.
 
-Upload failures are swallowed. With `DEBUG=restless` they log to stderr. Observability never breaks the request path.
+Upload failures are swallowed. With `DEBUG=restless` they log to stderr. Observability never breaks the request path. There is nothing to configure here and nothing to add to the user's code.
 
 ## 13. Options reference
 

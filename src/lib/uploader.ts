@@ -7,6 +7,18 @@ const BATCH_SIZE = 10;
 const FLUSH_INTERVAL_MS = 5000;
 /** Hard cap on the in-memory queue — prevents OOM during a metrics outage. */
 const MAX_QUEUE = 1000;
+/** BATCH-009: concurrent uploads per client, so a slow ingest can't grow the host's memory. */
+const MAX_IN_FLIGHT = 4;
+/** BATCH-010: entries per upload once the queue has grown past BATCH_SIZE behind the cap. */
+const MAX_UPLOAD_ENTRIES = 100;
+/** WIRE-028: an upload that has not answered by now is abandoned (and not retried, WIRE-027). */
+const UPLOAD_TIMEOUT_MS = 10_000;
+/** WIRE-026: retries of a refused upload, and the ceiling on any single wait. */
+const MAX_RETRIES = 2;
+const RETRY_BASE_MS = 1000;
+const MAX_RETRY_DELAY_MS = 10_000;
+/** Connection failures where nothing reached the server, so a retry cannot duplicate. */
+const NOT_SENT_CODES = new Set(["ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN"]);
 
 /** Internal — values the engine passes into the uploader after resolving settings. */
 export interface UploaderConfig {
@@ -82,9 +94,33 @@ function shouldFlushImmediately(baseUrl: string): boolean {
   return false;
 }
 
+/** WIRE-026: the server's Retry-After (seconds or an HTTP date), else jittered exponential backoff. */
+function retryDelayMs(res: Response | undefined, retry: number): number {
+  const header = res?.headers?.get?.("retry-after");
+  let ms: number | undefined;
+  if (header) {
+    const seconds = Number(header);
+    ms = Number.isFinite(seconds) ? seconds * 1000 : Date.parse(header) - Date.now();
+  }
+  if (ms === undefined || !Number.isFinite(ms) || ms < 0) {
+    ms = RETRY_BASE_MS * 2 ** retry * (0.5 + Math.random());
+  }
+  return Math.min(ms, MAX_RETRY_DELAY_MS);
+}
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+function notSent(err: unknown): boolean {
+  const code = (err as { cause?: { code?: string }; code?: string })?.cause?.code ??
+    (err as { code?: string })?.code;
+  return typeof code === "string" && NOT_SENT_CODES.has(code);
+}
+
 /**
  * Batched uploader — pushes captured requests to `/v1/request` in batches.
- * Batching is hardcoded (10 / 5000ms); localhost flushes per-request.
+ * Batching is hardcoded (10 / 5000ms); localhost flushes per-request. At most
+ * MAX_IN_FLIGHT uploads run at once; behind that cap the queue keeps filling
+ * (bounded by MAX_QUEUE) and each freed slot sends up to MAX_UPLOAD_ENTRIES.
  *
  * Never throws to callers — upload errors go to stderr under `DEBUG=restless`
  * and are otherwise swallowed. Observability must not break a request path.
@@ -92,6 +128,7 @@ function shouldFlushImmediately(baseUrl: string): boolean {
 export class Uploader {
   private queue: CapturedRequest[] = [];
   private timer: ReturnType<typeof setTimeout> | null = null;
+  private readonly inFlight = new Set<Promise<void>>();
 
   private readonly apiKey: string;
   private readonly baseUrl: string;
@@ -161,47 +198,77 @@ export class Uploader {
     }
     this.queue.push(captured);
 
-    if (
-      shouldFlushImmediately(this.baseUrl) ||
-      this.queue.length >= BATCH_SIZE
-    ) {
-      void this.flush();
+    if (shouldFlushImmediately(this.baseUrl)) {
+      this.pump(true);
+    } else if (this.queue.length >= BATCH_SIZE) {
+      this.pump(false);
     } else if (!this.timer) {
-      this.timer = setTimeout(() => void this.flush(), FLUSH_INTERVAL_MS);
+      this.timer = setTimeout(() => {
+        this.timer = null;
+        this.pump(true);
+      }, FLUSH_INTERVAL_MS);
     }
   }
 
+  /** Uploads everything queued, at most MAX_IN_FLIGHT at a time, and resolves when all of it settles. */
   async flush(): Promise<void> {
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = null;
     }
-    if (this.queue.length === 0) return;
+    while (this.queue.length || this.inFlight.size) {
+      this.pump(true);
+      if (!this.inFlight.size) break; // no API key: pump dropped the queue (BATCH-007)
+      await Promise.race(this.inFlight);
+    }
+  }
+
+  /**
+   * Starts uploads while a slot is free. `partial` sends a batch smaller than
+   * BATCH_SIZE (timer, explicit flush, dev/localhost); otherwise only full
+   * batches go, and a remainder waits for the timer.
+   */
+  private pump(partial: boolean) {
     if (!this.apiKey) {
-      if (debugEnabled())
+      if (this.queue.length && debugEnabled())
         console.warn("[@restlessai/sdk] no API key — dropping batch");
       this.queue.length = 0;
       return;
     }
-
-    const batch = this.queue.splice(0);
-
-    // Unique fingerprint keys in this batch. Passed to onResponse so the
-    // engine can negative-cache anything the server didn't return a
-    // recovery message for.
-    const batchFingerprints: string[] = [];
-    {
-      const seen = new Set<string>();
-      for (const c of batch) {
-        const k = c.errorFingerprint?.key;
-        if (k && !seen.has(k)) {
-          seen.add(k);
-          batchFingerprints.push(k);
-        }
-      }
+    while (
+      this.inFlight.size < MAX_IN_FLIGHT &&
+      this.queue.length > 0 &&
+      (partial || this.queue.length >= BATCH_SIZE)
+    ) {
+      const batch = this.queue.splice(0, MAX_UPLOAD_ENTRIES);
+      // SAFETY-001/004: an upload never rejects into the host, whatever send() hits.
+      const upload: Promise<void> = this.send(batch)
+        .catch((err) => {
+          if (debugEnabled()) console.error("[@restlessai/sdk] upload error:", err);
+        })
+        .finally(() => {
+          this.inFlight.delete(upload);
+          this.afterUpload();
+        });
+      this.inFlight.add(upload);
     }
+  }
 
-    const payload = batch.map((captured) => {
+  /** A slot freed up: send what is waiting, or make sure a remainder still has a timer. */
+  private afterUpload() {
+    if (!this.queue.length) return;
+    if (shouldFlushImmediately(this.baseUrl) || this.queue.length >= BATCH_SIZE) {
+      this.pump(shouldFlushImmediately(this.baseUrl));
+    } else if (!this.timer) {
+      this.timer = setTimeout(() => {
+        this.timer = null;
+        this.pump(true);
+      }, FLUSH_INTERVAL_MS);
+    }
+  }
+
+  private buildPayload(batch: CapturedRequest[]) {
+    return batch.map((captured) => {
       const entry = toHarEntry(captured);
       const user = captured.user || {};
       const project = user.project;
@@ -245,31 +312,78 @@ export class Uploader {
         },
       };
     });
+  }
 
-    const url = `${this.baseUrl}/v1/request`;
-    if (debugEnabled()) {
-      console.log(
-        `[@restlessai/sdk] uploading ${batch.length} entr${batch.length === 1 ? "y" : "ies"} to ${url}`,
-      );
+  /**
+   * One upload, holding its slot through any retries. Retries only what the
+   * ingest certainly did not store (WIRE-026/027): 429, 503, or a connection
+   * that never reached it. A 502/504 or timeout may have been stored, and a
+   * resend would duplicate it, so those are dropped like any other failure.
+   */
+  private async send(batch: CapturedRequest[]): Promise<void> {
+    // Unique fingerprint keys in this batch. Passed to onResponse so the
+    // engine can negative-cache anything the server didn't return a
+    // recovery message for.
+    const batchFingerprints: string[] = [];
+    {
+      const seen = new Set<string>();
+      for (const c of batch) {
+        const k = c.errorFingerprint?.key;
+        if (k && !seen.has(k)) {
+          seen.add(k);
+          batchFingerprints.push(k);
+        }
+      }
     }
-    try {
-      const res = await this.fetchImpl(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${this.apiKey}`,
-          // Which contract version produced this payload. The ingest
-          // ignores it today; it exists so an off-contract payload can be
-          // attributed to an SDK + spec version instead of guessed at.
-          // See spec/CONTRACT.md META-002.
-          "X-Restless-Spec-Version": SPEC_VERSION,
-          ...(this.samplingHash
-            ? { "x-restless-sampling": this.samplingHash }
-            : {}),
-        },
-        body: JSON.stringify(payload),
-      });
+
+    const body = JSON.stringify(this.buildPayload(batch));
+    const url = `${this.baseUrl}/v1/request`;
+
+    for (let retry = 0; ; retry += 1) {
+      if (debugEnabled()) {
+        console.log(
+          `[@restlessai/sdk] uploading ${batch.length} entr${batch.length === 1 ? "y" : "ies"} to ${url}${retry ? ` (retry ${retry})` : ""}`,
+        );
+      }
+      let res: Response;
+      try {
+        res = await this.fetchImpl(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${this.apiKey}`,
+            // Which contract version produced this payload. The ingest
+            // ignores it today; it exists so an off-contract payload can be
+            // attributed to an SDK + spec version instead of guessed at.
+            // See spec/CONTRACT.md META-002.
+            "X-Restless-Spec-Version": SPEC_VERSION,
+            ...(this.samplingHash
+              ? { "x-restless-sampling": this.samplingHash }
+              : {}),
+          },
+          body,
+          signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
+        });
+      } catch (err) {
+        if (notSent(err) && retry < MAX_RETRIES) {
+          await sleep(retryDelayMs(undefined, retry));
+          continue;
+        }
+        if (debugEnabled())
+          console.error("[@restlessai/sdk] upload error:", err);
+        return;
+      }
+
       if (!res.ok) {
+        if ((res.status === 503 || res.status === 429) && retry < MAX_RETRIES) {
+          const wait = retryDelayMs(res, retry);
+          if (debugEnabled())
+            console.warn(
+              `[@restlessai/sdk] upload refused (${res.status}); retrying in ${Math.round(wait)}ms`,
+            );
+          await sleep(wait);
+          continue;
+        }
         if (debugEnabled()) {
           console.error(
             `[@restlessai/sdk] upload failed: ${res.status} ${await res.text()}`,
@@ -277,6 +391,7 @@ export class Uploader {
         }
         return;
       }
+
       if (debugEnabled()) {
         console.log(`[@restlessai/sdk] upload ok: ${res.status}`);
       }
@@ -284,15 +399,13 @@ export class Uploader {
       // server-driven enrichment invalidation + similar signals.
       if (this.onResponse) {
         try {
-          const body = await res.json();
-          this.onResponse(body, batchFingerprints);
+          const parsed = await res.json();
+          this.onResponse(parsed, batchFingerprints);
         } catch {
           /* non-JSON response is fine */
         }
       }
-    } catch (err) {
-      if (debugEnabled())
-        console.error("[@restlessai/sdk] upload error:", err);
+      return;
     }
   }
 

@@ -263,3 +263,179 @@ describe("Uploader", () => {
     expect(fetchImpl).toHaveBeenCalled();
   });
 });
+
+// Spec 1.3.0: bounded concurrency (BATCH-009/010), refused-upload retries
+// (WIRE-026/027) and the upload timeout (WIRE-028).
+describe("Uploader: cap, retries, timeout", () => {
+  const ok = () => ({ ok: true, status: 202, text: async () => "", json: async () => ({}) });
+  const refused = (status: number, retryAfter = "0") => ({
+    ok: false,
+    status,
+    headers: { get: (h: string) => (h.toLowerCase() === "retry-after" ? retryAfter : null) },
+    text: async () => "busy",
+  });
+  const entriesIn = (call: unknown[]) =>
+    (JSON.parse((call[1] as { body: string }).body) as unknown[]).length;
+
+  async function inProduction<T>(fn: () => Promise<T>): Promise<T> {
+    const orig = process.env.NODE_ENV;
+    process.env.NODE_ENV = "production";
+    try {
+      return await fn();
+    } finally {
+      if (orig === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = orig;
+    }
+  }
+
+  it("never runs more than 4 uploads at once, and sends the backlog 100 at a time", () =>
+    inProduction(async () => {
+      const release: Array<() => void> = [];
+      const fetchImpl = vi.fn(
+        () => new Promise((resolve) => release.push(() => resolve(ok()))),
+      );
+      const up = new Uploader({
+        apiKey: "k",
+        baseUrl: "https://remote.example",
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      });
+
+      for (let i = 0; i < 300; i++) up.push(mkCaptured(`r-${i}`));
+      await new Promise((r) => setTimeout(r, 0));
+      expect(fetchImpl).toHaveBeenCalledTimes(4);
+      expect(fetchImpl.mock.calls.map(entriesIn)).toEqual([10, 10, 10, 10]);
+
+      // Each freed slot takes up to 100 of what queued behind the cap.
+      release.splice(0).forEach((r) => r());
+      await new Promise((r) => setTimeout(r, 0));
+      expect(fetchImpl.mock.calls.slice(4).map(entriesIn)).toEqual([100, 100, 60]);
+
+      release.splice(0).forEach((r) => r());
+      await up.flush();
+      expect(fetchImpl.mock.calls.map(entriesIn).reduce((a, b) => a + b, 0)).toBe(300);
+    }));
+
+  it("retries 503 and 429 with the same body, honouring Retry-After", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(refused(503))
+      .mockResolvedValueOnce(refused(429))
+      .mockResolvedValueOnce(ok());
+    const up = new Uploader({
+      apiKey: "k",
+      baseUrl: "http://localhost:3003",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    up.push(mkCaptured("a"));
+    await up.flush();
+
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    const bodies = fetchImpl.mock.calls.map((c) => (c[1] as { body: string }).body);
+    expect(new Set(bodies).size).toBe(1);
+  });
+
+  it("gives up on a refused upload after 2 retries", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(refused(503));
+    const up = new Uploader({
+      apiKey: "k",
+      baseUrl: "http://localhost:3003",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    up.push(mkCaptured("a"));
+    await up.flush();
+
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+
+  it.each([
+    ["a 502 (the ingest may have stored it)", () => Promise.resolve(refused(502))],
+    ["a 504", () => Promise.resolve(refused(504))],
+    [
+      "a timeout",
+      () => Promise.reject(Object.assign(new Error("timed out"), { name: "TimeoutError" })),
+    ],
+    [
+      "a reset after the request was sent",
+      () => Promise.reject(Object.assign(new TypeError("fetch failed"), { cause: { code: "ECONNRESET" } })),
+    ],
+  ])("does not retry %s", async (_label, respond) => {
+    const fetchImpl = vi.fn(respond);
+    const up = new Uploader({
+      apiKey: "k",
+      baseUrl: "http://localhost:3003",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    up.push(mkCaptured("a"));
+    await up.flush();
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries a connection that never reached the ingest", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchImpl = vi
+        .fn()
+        .mockRejectedValueOnce(
+          Object.assign(new TypeError("fetch failed"), { cause: { code: "ECONNREFUSED" } }),
+        )
+        .mockResolvedValueOnce(ok());
+      const up = new Uploader({
+        apiKey: "k",
+        baseUrl: "http://localhost:3003",
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      });
+
+      up.push(mkCaptured("a"));
+      const flushed = up.flush();
+      await vi.runAllTimersAsync();
+      await flushed;
+
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("gives every upload a timeout signal", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(ok());
+    const up = new Uploader({
+      apiKey: "k",
+      baseUrl: "http://localhost:3003",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    up.push(mkCaptured("a"));
+    await up.flush();
+
+    expect((fetchImpl.mock.calls[0][1] as { signal?: AbortSignal }).signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("never surfaces a rejection when reading a failed response throws", async () => {
+    const unhandled = vi.fn();
+    process.on("unhandledRejection", unhandled);
+    try {
+      const fetchImpl = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        text: () => Promise.reject(new Error("body stream broke")),
+      });
+      const up = new Uploader({
+        apiKey: "k",
+        baseUrl: "http://localhost:3003",
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      });
+
+      up.push(mkCaptured("a"));
+      await up.flush();
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      process.off("unhandledRejection", unhandled);
+    }
+  });
+});

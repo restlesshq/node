@@ -1,6 +1,6 @@
 # Restless SDK Contract
 
-**Spec version:** 1.2.0
+**Spec version:** 1.3.0
 **Status:** Draft
 **Reference implementation:** `@restlessai/sdk` (this repository)
 
@@ -929,11 +929,29 @@ response, for every project; it is not a custom-domain override. The wire
 field keeps the name `docsUrl` for compatibility with already-deployed
 SDKs.
 
-**WIRE-024** (MUST) An unsuccessful upload (non-2xx) MUST NOT be retried
-and MUST NOT raise. The batch is dropped.
+**WIRE-024** (MUST) An unsuccessful upload MUST NOT raise. It MUST NOT be
+retried except as WIRE-026 allows; otherwise the batch is dropped.
 
 **WIRE-025** (MUST) `needsSamplingConfig: true` triggers a re-send of the
 sampling report (SAMPLE-053).
+
+**WIRE-026** (MUST) A `503` or `429` response means the ingest refused the
+batch without storing it, so the same batch MUST be retried, at most **2**
+times. The wait before each retry is the response's `Retry-After` (seconds
+or an HTTP date) when present, otherwise jittered exponential backoff from
+1 s; either way it is capped at **10 s**. A failure where the request never
+reached the ingest (connection refused, DNS failure) MAY be retried the
+same way.
+
+**WIRE-027** (MUST NOT) Any other failure MUST NOT be retried: other
+non-2xx statuses including `502` and `504`, timeouts, and connections lost
+after the request was sent. The ingest may already have stored the batch,
+it does not deduplicate entries, and a resend would double them.
+
+**WIRE-028** (MUST) An upload attempt that has not completed within
+**10 s** is abandoned. It is a failure under WIRE-027, not a retry. Each
+retry gets its own 10 s. Where the platform's HTTP client cannot bound a
+whole request, a 10 s limit on each connect and read is acceptable.
 
 ---
 
@@ -956,8 +974,9 @@ developer loop and self-hosted setups low-latency.
 full, the **oldest** entry is dropped to make room. Dropping newest would
 discard exactly the requests an operator is actively debugging.
 
-**BATCH-005** (MUST) An explicit `flush()` uploads the queued batch and
-resolves when the attempt completes.
+**BATCH-005** (MUST) An explicit `flush()` uploads everything queued,
+within the BATCH-009 cap, and resolves when those uploads and any already in
+flight have completed, retries included.
 
 **BATCH-006** (MUST) A flush with an empty queue is a no-op.
 
@@ -968,6 +987,19 @@ and clears the queue. It MUST NOT retry or accumulate.
 test runner, captures MUST be dropped rather than uploaded, unless
 `RESTLESS_SETUP_MODE=1` is set. Test suites must not hammer production
 ingest. Detection is per-language (section 14).
+
+**BATCH-009** (MUST) At most **4** uploads are in flight per client at any
+time, counting an upload that is waiting to retry (WIRE-026). An SDK with
+no limit turns a slow ingest into unbounded memory and sockets in the
+customer's process: the reference load test reached 3,589 concurrent
+uploads before the host was restarted.
+
+**BATCH-010** (MUST) While uploads are capped, captures keep queueing,
+bounded by BATCH-004. When a slot frees, the next upload carries up to
+**100** entries from the head of the queue, so a busy client clears its
+backlog instead of shedding it at the queue cap. A batch smaller than 10 is
+still only sent by the flush timer (BATCH-002), an explicit flush, or the
+BATCH-003 conditions.
 
 ---
 
@@ -1403,6 +1435,15 @@ document its own choices; none of it is compared for conformance.
   ecosystem's convention, or omit it.
 - **Build-time and bundler integration.** Node's Next.js auto-wrap
   (loader plus plugin) has no cross-language analogue.
+- **Forking servers.** Under a pre-fork server (Puma, Unicorn, Gunicorn)
+  the queue and upload workers do not survive into the child. A port SHOULD
+  give each child a fresh uploader and drop the entries it inherited, since
+  the parent still owns and sends them.
+- **Test transport hooks.** A port MAY let tests swap the HTTP call. It
+  SHOULD give that hook an idiomatic way to report a non-2xx status and
+  `Retry-After` (an exception in Python, an error value in Go), so a
+  swapped transport can exercise WIRE-026. A hook that doesn't is never
+  retried.
 
 ---
 
@@ -1475,6 +1516,15 @@ lifted the status gate on two headers, which is observable, but no SDK
 option, no method signature and no wire field moved.
 
 ### 16.1 Changelog
+
+- **1.3.0** - Upload backpressure. WIRE-024 now allows the retries in
+  WIRE-026 (retry `503`/`429`, honouring `Retry-After`, at most 2 times);
+  WIRE-027 forbids retrying anything the ingest may have stored; WIRE-028
+  adds a 10 s upload timeout; BATCH-009 caps uploads in flight at 4 and
+  BATCH-010 lets a freed slot send up to 100 entries; BATCH-005 now drains
+  the whole queue. Minor under CHANGE-005: no option, method or wire field
+  moves, and the ingest already answers `503` + `Retry-After` when it sheds
+  load. Existing 1.2.0 SDKs stay conformant to 1.2.0 until they adopt it.
 
 - **1.2.0** - INJECT-002 adds `x-api-feedback: npx api feedback
   <displayRequestId>`, set on every status with no portal-origin

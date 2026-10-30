@@ -45,7 +45,19 @@ The file is read once per process and cached.
 - **Queue size:** 10 requests. Flushed when reached.
 - **Flush interval:** 5000 ms. Flushed when a queued request is older than this.
 - **Localhost short-circuit:** when `baseUrl` is `localhost` or `127.0.0.1`, every push flushes immediately. Keeps dev-loop latency low.
-- **Explicit flush:** `client.flush()`. Call before process exit if you care about in-flight captures.
+- **Explicit flush:** `client.flush()`. Uploads everything queued (within the in-flight cap) and resolves when those uploads, retries included, have finished. Call before process exit if you care about in-flight captures.
+- **In-flight cap:** at most 4 uploads run at once. A slow or refusing ingest therefore can't grow sockets or memory in your process: captures keep queueing (up to the 1000-entry queue cap) instead.
+- **Catch-up batches:** when a slot frees and more than 10 captures are waiting, the next upload carries up to 100 of them, so a busy process drains its backlog instead of dropping it at the queue cap.
+- **Timeout:** an upload that hasn't completed in 10 s is abandoned.
+
+### Retries
+
+Only uploads the ingest certainly did **not** store are retried:
+
+- `503` (the ingest is shedding load) and `429`: retried up to 2 times, waiting for the `Retry-After` the server sent (else 1 s doubling with jitter), never more than 10 s per wait.
+- A connection that never reached the ingest (connection refused, DNS failure): retried the same way.
+
+Everything else is dropped, never retried: other non-2xx statuses including `502`/`504`, timeouts, and connections lost after the request was sent. In those cases the ingest may already have stored the batch, and it doesn't deduplicate entries, so a resend would double them. An upload waiting to retry keeps its in-flight slot, which is what makes the cap a real backpressure limit. See spec/CONTRACT.md WIRE-024 to WIRE-028 and BATCH-009/010.
 
 These values are currently hardcoded. If a real use case needs them tuneable, add a field to `EngineConfig` in `src/lib/capture.ts`.
 
