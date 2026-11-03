@@ -147,6 +147,18 @@ const GENERATORS = {
   normalizeRoute: () => ({ route: randomRoute() }),
   normalizeMessage: () => ({ message: randomMessage() }),
   recoverySlug: () => ({ method: pick(["GET", "POST", "delete", "", null]), path: pick([randomRoute(), "", null]) }),
+  // Header parsing is where ports drift: quoting, case, list splitting,
+  // and which element of a multi-hop chain counts (HAR-013).
+  requestScheme: () => {
+    const proto = () => pick(["https", "http", "HTTPS", " https ", '"https"', "wss", "", randomToken()]);
+    const headers = {};
+    if (rnd() < 0.5) headers[pick(["x-forwarded-proto", "X-Forwarded-Proto"])] = pick([proto(), `${proto()}, ${proto()}`, `${proto()},${proto()}`]);
+    if (rnd() < 0.5) {
+      const el = () => pick([`proto=${proto()}`, `for=192.0.2.1;proto=${proto()}`, `Proto=${proto()};by=x`, "for=192.0.2.1", `proto=${proto()};proto=${proto()}`]);
+      headers[pick(["forwarded", "Forwarded"])] = pick([el(), `${el()}, ${el()}`]);
+    }
+    return { headers, encrypted: rnd() < 0.5 };
+  },
   stripRequestIdPrefix: () => ({ requestId: pick([randomString(12), "TST-550e8400-e29b-41d4-a716-446655440000", "550e8400-e29b-41d4-a716-446655440000"]) }),
   fingerprint: () => ({
     status: pick([400, 401, 402, 403, 404, 409, 422, 429, 500, 502, 503]),

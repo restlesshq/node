@@ -246,3 +246,47 @@ describe("fastify adapter: hook ordering with user auth", () => {
     expect(sent.body).toEqual({ error: "no" });
   });
 });
+
+describe("fastify adapter: logged URL scheme (RES-21)", () => {
+  beforeEach(() => _resetSettingsCache());
+
+  async function loggedUrl(headers: Record<string, string>, encrypted = false): Promise<string> {
+    let uploaded: any;
+    const fetchImpl = vi.fn(async (_url: string, init: any) => {
+      uploaded = JSON.parse(init.body);
+      return { ok: true, text: async () => "" } as any;
+    });
+    const client = restless("rdme_test", { baseUrl: "http://localhost:3003", fetch: fetchImpl as unknown as typeof fetch });
+    const app = mockFastify();
+    await app.register(client.setup(() => ({})));
+    const req: any = {
+      headers: { host: "api.example.com", ...headers },
+      raw: { socket: { encrypted }, method: "GET", url: "/v1/ping" },
+      url: "/v1/ping",
+    };
+    const resHeaders: Record<string, string> = {};
+    const reply: any = {
+      statusCode: 200,
+      header: (k: string, v: string) => { resHeaders[k] = v; return reply; },
+      getHeaders: () => resHeaders,
+      code: () => reply,
+    };
+    for (const h of app.hooks.onRequest!) await h(req, reply);
+    for (const h of (app.hooks.preHandler || [])) await h(req, reply);
+    for (const h of app.hooks.onSend!) await h(req, reply, "{}");
+    await client.flush();
+    return uploaded[0].request.log.entries[0].request.url;
+  }
+
+  it("logs https when the proxy sends x-forwarded-proto: https", async () => {
+    expect(await loggedUrl({ "x-forwarded-proto": "https" })).toBe("https://api.example.com/v1/ping");
+  });
+
+  it("logs https for a TLS socket with no forwarding headers", async () => {
+    expect(await loggedUrl({}, true)).toBe("https://api.example.com/v1/ping");
+  });
+
+  it("logs http for a plain socket with no forwarding headers", async () => {
+    expect(await loggedUrl({})).toBe("http://api.example.com/v1/ping");
+  });
+});

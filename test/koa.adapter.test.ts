@@ -95,3 +95,37 @@ describe("koa adapter", () => {
     expect(entry.request.postData.text).toBe('{"hello":"world"}');
   });
 });
+
+describe("koa adapter: logged URL scheme (RES-21)", () => {
+  beforeEach(() => _resetSettingsCache());
+
+  async function loggedUrl(ctxOverrides: any): Promise<string> {
+    let uploaded: any;
+    const fetchImpl = vi.fn(async (_url: string, init: any) => {
+      uploaded = JSON.parse(init.body);
+      return { ok: true, text: async () => "" } as any;
+    });
+    const client = restlessKoa("rdme_test", { baseUrl: "http://localhost:3003", fetch: fetchImpl as unknown as typeof fetch });
+    const mw = client.setup(() => ({}));
+    await mw(mockCtx({ method: "GET", originalUrl: "/v1/ping", url: "/v1/ping", ...ctxOverrides }), async () => {});
+    await client.flush();
+    return uploaded[0].request.log.entries[0].request.url;
+  }
+
+  it("logs https from x-forwarded-proto even without app.proxy", async () => {
+    // Without `app.proxy = true`, Koa's own ctx.protocol ignores the header.
+    const url = await loggedUrl({
+      protocol: "http",
+      request: { headers: { host: "localhost", "x-forwarded-proto": "https" }, body: undefined },
+    });
+    expect(url).toBe("https://localhost/v1/ping");
+  });
+
+  it("keeps https when ctx.protocol reports a TLS socket", async () => {
+    expect(await loggedUrl({ protocol: "https" })).toBe("https://localhost/v1/ping");
+  });
+
+  it("logs http for a plain request", async () => {
+    expect(await loggedUrl({})).toBe("http://localhost/v1/ping");
+  });
+});
