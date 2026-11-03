@@ -17,6 +17,55 @@ import {
   type AdapterClient,
 } from "../lib/adapterFactory.js";
 
+interface HonoRoute {
+  method?: unknown;
+  path?: unknown;
+  handler?: unknown;
+}
+
+/**
+ * The endpoint this request was routed to, or undefined when no endpoint
+ * matched. Never throws.
+ *
+ * `c.req.routePath` is the path of whichever handler ran last, so a
+ * middleware that answers first (auth's 401, a rate limiter's 429) reports
+ * its own pattern: every rejected request under `app.use('/v1/*', auth)`
+ * would be logged as `/v1/*`, and so would every unmatched 404 there
+ * (RES-20). The router has already matched the whole chain, though, so the
+ * endpoint is in `c.req.matchedRoutes` even when it never ran.
+ *
+ * An endpoint is a route registered for a method (`app.get`), or an
+ * `app.all` handler; `app.use` registers middleware as `ALL` too, told
+ * apart by arity the way Hono's own route helper does (middleware takes
+ * `next`). The route that ran wins when it is an endpoint; otherwise the
+ * first endpoint matched, which is the one Hono would have dispatched to.
+ * No endpoint means no pattern rather than a middleware's wildcard
+ * (CONTRACT.md, "Where the route pattern comes from").
+ */
+function honoRoutePattern(c: any): string | undefined {
+  try {
+    const routes: unknown = c.req.matchedRoutes;
+    // Not a Hono context we recognize (or a test double): what the
+    // framework says ran is the best there is.
+    if (!Array.isArray(routes)) {
+      const p = c.req.routePath;
+      return typeof p === "string" && p !== "" ? p : undefined;
+    }
+    const isEndpoint = (r: HonoRoute | undefined): boolean =>
+      !!r &&
+      typeof r.path === "string" &&
+      (r.method !== "ALL" ||
+        (typeof r.handler === "function" && r.handler.length < 2));
+    const ran = routes[c.req.routeIndex] as HonoRoute | undefined;
+    const hit = isEndpoint(ran)
+      ? ran
+      : (routes as HonoRoute[]).find(isEndpoint);
+    return hit ? (hit.path as string) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function honoMiddleware(handle: SetupHandle) {
   if (!isSetupHandle(handle)) {
     throw new Error(
@@ -71,12 +120,13 @@ function honoMiddleware(handle: SetupHandle) {
     }
 
     const duration = Date.now() - startTime;
+    const routePattern = honoRoutePattern(c);
 
     // One decision per request (SAMPLE-032). `c.res` has not been sent yet:
     // Hono serves it after the middleware chain unwinds.
     const outcome = engine.sample(
       req.method,
-      c.req.routePath,
+      routePattern,
       failure ? errorStatus(failure.err) : (c.res as Response).status,
     );
 
@@ -96,7 +146,7 @@ function honoMiddleware(handle: SetupHandle) {
         requestId: rawId,
         startedAt,
         duration,
-        routePattern: c.req.routePath,
+        routePattern,
         request: {
           method: req.method,
           url: req.url,
@@ -136,7 +186,7 @@ function honoMiddleware(handle: SetupHandle) {
         headers: resHeaders,
         body: rawBody,
       },
-      routePattern: c.req.routePath,
+      routePattern,
       stackTrace,
     });
 
@@ -148,7 +198,7 @@ function honoMiddleware(handle: SetupHandle) {
       fingerprint: fingerprint?.key,
       strategy: fingerprint?.strategy,
       method: req.method,
-      path: c.req.routePath,
+      path: routePattern,
       portalUrl: engine.portalUrl,
     });
     for (const [k, v] of Object.entries(debug.headers)) c.header(k, v);
@@ -169,7 +219,7 @@ function honoMiddleware(handle: SetupHandle) {
     engine.record({
       requestId: rawId,
       startedAt,
-      routePattern: c.req.routePath,
+      routePattern,
       request: {
         method: req.method,
         url: req.url,

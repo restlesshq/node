@@ -695,6 +695,203 @@ describe("route patterns", () => {
     });
   });
 
+  describe("requests answered before routing (RES-20)", () => {
+    // Router stacks shaped like the real ones (checked against express
+    // 4.22 and 5.3), for an app that authenticates `/v1` before routing:
+    //   app.use('/v1', auth); const v1 = express.Router();
+    //   v1.get('/shipments/:id'); v1.use('/orgs/:oid', orgs);
+    //   orgs.get('/members/:mid'); app.use('/v1', v1);
+    const auth = () => {};
+    const getOnly = {
+      _handles_method: (m: string) => ["get", "head"].includes(m.toLowerCase()),
+      _handlesMethod: (m: string) => ["get", "head"].includes(m.toLowerCase()),
+    };
+
+    // Express 4: one compiled RegExp and its keys per layer.
+    const v4 = (routes: any[]) => ({
+      _router: {
+        stack: [
+          { regexp: Object.assign(/^\/?(?=\/|$)/i, { fast_slash: true }), keys: [], handle: auth },
+          { regexp: /^\/v1\/?(?=\/|$)/i, keys: [], handle: auth },
+          { regexp: /^\/v1\/?(?=\/|$)/i, keys: [], handle: { stack: routes } },
+        ],
+      },
+      // Express 4 throws a deprecation error from this getter.
+      get router(): never {
+        throw new Error("'app.router' is deprecated!");
+      },
+    });
+    const v4Shipment = {
+      regexp: /^\/shipments\/(?:([^\/]+?))\/?$/i,
+      keys: [{ name: "id" }],
+      route: { path: "/shipments/:id", ...getOnly },
+    };
+    const v4Orgs = {
+      regexp: /^\/orgs\/(?:([^\/]+?))\/?(?=\/|$)/i,
+      keys: [{ name: "oid" }],
+      handle: {
+        stack: [
+          { regexp: /^\/?(?=\/|$)/i, keys: [], handle: auth },
+          {
+            regexp: /^\/members\/(?:([^\/]+?))\/?$/i,
+            keys: [{ name: "mid" }],
+            route: { path: "/members/:mid", ...getOnly },
+          },
+        ],
+      },
+    };
+
+    // Express 5: `matchers` functions; a bare `use()` is a `slash` layer.
+    const prefix = (p: string) => (path: string) =>
+      path === p || path.startsWith(p + "/") ? { path: p, params: {} } : false;
+    const v5 = (routes: any[]) => ({
+      router: {
+        stack: [
+          { slash: true, matchers: [], handle: auth },
+          { matchers: [prefix("/v1")], handle: auth },
+          { matchers: [prefix("/v1")], handle: { stack: routes } },
+        ],
+      },
+    });
+    const v5Shipment = {
+      matchers: [
+        (path: string) => {
+          const m = /^\/shipments\/([^/]+)\/?$/.exec(path);
+          if (!m) return false;
+          return { path: m[0], params: { id: decodeURIComponent(m[1]) } };
+        },
+      ],
+      route: { path: "/shipments/:id", ...getOnly },
+    };
+
+    const unauthorized = (res: http.ServerResponse) => {
+      res.statusCode = 401;
+      res.setHeader("content-type", "application/json");
+      res.end('{"error":"missing_api_key"}');
+    };
+
+    it("reports the route Express 4 would have reached", async () => {
+      const { result, uploads } = await routed(
+        { app: v4([v4Shipment]) } as any,
+        "/v1/shipments/shp_yrqnk1axaotem",
+        { handler: unauthorized },
+      );
+      expect(result.status).toBe(401);
+      expect(uploads[0].routePattern).toBe("/v1/shipments/{id}");
+    });
+
+    it("reports the route Express 5 would have reached", async () => {
+      const { uploads } = await routed(
+        { app: v5([v5Shipment]) } as any,
+        "/v1/shipments/shp_yrqnk1axaotem",
+        { handler: unauthorized },
+      );
+      expect(uploads[0].routePattern).toBe("/v1/shipments/{id}");
+    });
+
+    it("templates a param mount from its own captures", async () => {
+      const { uploads } = await routed(
+        { app: v4([v4Shipment, v4Orgs]) } as any,
+        "/v1/orgs/o_9/members/m_3",
+        { handler: unauthorized },
+      );
+      expect(uploads[0].routePattern).toBe("/v1/orgs/{oid}/members/{mid}");
+    });
+
+    it("ignores the query string", async () => {
+      const { uploads } = await routed(
+        { app: v4([v4Shipment]) } as any,
+        "/v1/shipments/shp_1?expand=events",
+        { handler: unauthorized },
+      );
+      expect(uploads[0].routePattern).toBe("/v1/shipments/{id}");
+    });
+
+    it("reports no pattern when no route handles the method", async () => {
+      const { result, uploads } = await routed(
+        { app: v4([v4Shipment]), method: "POST" } as any,
+        "/v1/shipments/shp_1",
+        { handler: unauthorized },
+      );
+      expect(result.status).toBe(401);
+      expect(uploads[0].routePattern).toBeUndefined();
+    });
+
+    it("reports no pattern for a path no route serves", async () => {
+      const { uploads } = await routed(
+        { app: v5([v5Shipment]) } as any,
+        "/v1/nope",
+        { handler: unauthorized },
+      );
+      expect(uploads[0].routePattern).toBeUndefined();
+    });
+
+    it("stops at a matching RegExp route rather than report a later one", async () => {
+      const regexpRoute = {
+        regexp: /^\/shipments\/shp_1\/?$/i,
+        keys: [],
+        route: { path: /^\/shipments\/shp_1$/, ...getOnly },
+      };
+      const { uploads } = await routed(
+        { app: v4([regexpRoute, v4Shipment]) } as any,
+        "/v1/shipments/shp_1",
+        { handler: unauthorized },
+      );
+      expect(uploads[0].routePattern).toBeUndefined();
+    });
+
+    it("applies the route's sampling rule", async () => {
+      const { result, uploads } = await routed(
+        { app: v4([v4Shipment]) } as any,
+        "/v1/shipments/shp_1",
+        {
+          handler: unauthorized,
+          sampling: { routes: { "GET /v1/shipments/{id}": "off" } },
+        },
+      );
+      expect(result.status).toBe(401);
+      expect(uploads).toEqual([]);
+    });
+
+    it("logs without a pattern when a matcher throws on a malformed escape", async () => {
+      const throwing = {
+        matchers: [
+          () => {
+            throw new URIError("URI malformed");
+          },
+        ],
+        route: { path: "/shipments/:id", ...getOnly },
+      };
+      const { result, uploads } = await routed(
+        { app: v5([throwing]) } as any,
+        "/v1/shipments/%E0%A4%A",
+        { handler: unauthorized },
+      );
+      expect(result.status).toBe(401);
+      expect(uploads).toHaveLength(1);
+      expect(uploads[0].routePattern).toBeUndefined();
+    });
+
+    it("points the recovery link at the endpoint, not 'unknown'", async () => {
+      const restless = restlessExpress("rdme_test", {
+        baseUrl: "http://localhost:3003",
+        fetch: portalFetch(),
+      });
+      const mw = restless.setup(() => ({}));
+      await warmPortalOrigin(mw);
+      const result = await run(
+        mw,
+        (req, res) => {
+          Object.assign(req, { app: v4([v4Shipment]) });
+          unauthorized(res);
+        },
+        { method: "GET", path: "/v1/shipments/shp_1" },
+      );
+      const debug = JSON.parse(result.body).debug;
+      expect(debug.recovery).toContain("/get-v1-shipments-id.md");
+    });
+  });
+
   describe("SAFETY-001: the SDK never breaks the response", () => {
     it("logs without a pattern when reading req.route throws", async () => {
       const { result, uploads } = await routed(
