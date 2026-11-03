@@ -158,6 +158,13 @@ function findRoute(
       if (typeof handles !== "function" || !handles.call(route, method)) {
         continue;
       }
+      // An app's own RegExp is never run here. Express only reaches it for a
+      // request that got through the middleware, and this lookup is for one
+      // that didn't (an unauthenticated 401), so running it would expose a
+      // backtracking-prone pattern to traffic it never saw before. It has no
+      // template to report either way. The cost: a later string route that
+      // also matches is reported when the RegExp route would have served it.
+      if (hasRegExp(route.path)) continue;
       if (!matchLayer(layer, path)) continue;
       const template = routeTemplate(route.path, path);
       return template === undefined ? null : joinRoute(base, template);
@@ -170,11 +177,53 @@ function findRoute(
     const next = path[m.path.length];
     if (next !== undefined && next !== "/") continue;
     const rest = path.slice(m.path.length) || "/";
-    const mount = templateMount(m.path, m.params, "").replace(/\/+$/, "");
-    const found = findRoute(inner, rest, method, base + mount);
+    // Express would enter this router, so a mount that can't be templated
+    // ends the search with no pattern rather than a concrete one.
+    const mount = templateCaptures(m.path, m.params);
+    if (mount === undefined) return null;
+    const found = findRoute(inner, rest, method, base + mount.replace(/\/+$/, ""));
     if (found !== undefined) return found;
   }
   return undefined;
+}
+
+function hasRegExp(registered: unknown): boolean {
+  return Array.isArray(registered)
+    ? registered.some((p) => p instanceof RegExp)
+    : registered instanceof RegExp;
+}
+
+/**
+ * A mount prefix with each param it captured put back as `:name`, or
+ * undefined when one can't be: a single-segment value it can't place, a
+ * wildcard spanning segments, or an unnamed RegExp group. Unlike
+ * `templateMount`, which leaves those concrete, this has the layer's exact
+ * captures, so any value left over would be a concrete ID in the pattern.
+ */
+function templateCaptures(
+  prefix: string,
+  params: Record<string, unknown>,
+): string | undefined {
+  const segs = prefix.split("/");
+  const decoded = segs.map((seg) => {
+    try {
+      return decodeURIComponent(seg);
+    } catch {
+      return seg;
+    }
+  });
+  const claimed = new Set<number>();
+  for (const [name, value] of Object.entries(params)) {
+    if (value === undefined) continue; // optional param that didn't match
+    if (/^\d+$/.test(name) || typeof value !== "string" || value === "") {
+      return undefined;
+    }
+    const i = decoded.findIndex((d, j) => d === value && !claimed.has(j));
+    if (i === -1) return undefined;
+    claimed.add(i);
+    segs[i] = `:${name}`;
+  }
+  return segs.join("/");
 }
 
 /** `layer.match()` without its side effects, for both Express majors. */

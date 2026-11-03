@@ -826,15 +826,64 @@ describe("route patterns", () => {
       expect(uploads[0].routePattern).toBeUndefined();
     });
 
-    it("stops at a matching RegExp route rather than report a later one", async () => {
+    it("never runs an app's own RegExp route against the path", async () => {
+      // Express 4 compiles a RegExp route to that same RegExp.
+      const appRegExp = /^\/shipments\/legacy-(.*)$/i;
+      const exec = vi.spyOn(appRegExp, "exec");
       const regexpRoute = {
-        regexp: /^\/shipments\/shp_1\/?$/i,
-        keys: [],
-        route: { path: /^\/shipments\/shp_1$/, ...getOnly },
+        regexp: appRegExp,
+        keys: [{ name: 0 }],
+        route: { path: appRegExp, ...getOnly },
       };
       const { uploads } = await routed(
         { app: v4([regexpRoute, v4Shipment]) } as any,
-        "/v1/shipments/shp_1",
+        "/v1/shipments/legacy-1",
+        { handler: unauthorized },
+      );
+      expect(exec).not.toHaveBeenCalled();
+      // The documented cost: the later string route that also matches.
+      expect(uploads[0].routePattern).toBe("/v1/shipments/{id}");
+    });
+
+    it("reports no pattern when a mount's unnamed capture can't be templated", async () => {
+      // app.use(/^\/t\/(\d+)/, router): the 42 has no name to put back.
+      const app = {
+        _router: {
+          stack: [
+            {
+              regexp: /^\/t\/(\d+)\/?(?=\/|$)/i,
+              keys: [{ name: 0 }],
+              handle: { stack: [v4Shipment] },
+            },
+          ],
+        },
+      };
+      const { uploads } = await routed({ app } as any, "/t/42/shipments/shp_1", {
+        handler: unauthorized,
+      });
+      expect(uploads[0].routePattern).toBeUndefined();
+    });
+
+    it("reports no pattern for a wildcard mount spanning segments", async () => {
+      // Express 5 hands a `*rest` capture over as an array of segments.
+      const app = {
+        router: {
+          stack: [
+            {
+              matchers: [
+                (p: string) =>
+                  p.startsWith("/files/x/y")
+                    ? { path: "/files/x/y", params: { rest: ["x", "y"] } }
+                    : false,
+              ],
+              handle: { stack: [v5Shipment] },
+            },
+          ],
+        },
+      };
+      const { uploads } = await routed(
+        { app } as any,
+        "/files/x/y/shipments/shp_1",
         { handler: unauthorized },
       );
       expect(uploads[0].routePattern).toBeUndefined();

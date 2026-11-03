@@ -37,8 +37,12 @@ interface HonoRoute {
  * An endpoint is a route registered for a method (`app.get`), or an
  * `app.all` handler; `app.use` registers middleware as `ALL` too, told
  * apart by arity the way Hono's own route helper does (middleware takes
- * `next`). The route that ran wins when it is an endpoint; otherwise the
- * first endpoint matched, which is the one Hono would have dispatched to.
+ * `next`). Arity only decides for `ALL` routes, and it reads the declared
+ * parameter list: an `app.all` endpoint that declares `next` counts as
+ * middleware, and middleware declared with a rest or defaulted `next`
+ * counts as an endpoint. The route that ran wins when it is an endpoint;
+ * otherwise the first endpoint matched, which is the one Hono would have
+ * dispatched to.
  * No endpoint means no pattern rather than a middleware's wildcard
  * (CONTRACT.md, "Where the route pattern comes from").
  */
