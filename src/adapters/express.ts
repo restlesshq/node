@@ -42,6 +42,9 @@ import type { SamplingOutcome } from "../lib/sampling.js";
  * URL, not the mount pattern: `app.use('/users/:uid', r)` gives
  * `/users/42`. Mount params are templated back from `req.params`, which
  * holds them when the router uses `mergeParams` (as it must to read them).
+ *
+ * No `req.route` means the response came before Express reached a route;
+ * the route it would have reached is looked up instead (`routeFromStack`).
  */
 function expressRoutePattern(req: unknown): string | undefined {
   try {
@@ -51,27 +54,213 @@ function expressRoutePattern(req: unknown): string | undefined {
       path?: unknown;
       params?: unknown;
     };
-    const registered = r.route?.path;
-    const route =
-      typeof registered === "string"
-        ? registered
-        : Array.isArray(registered)
-          ? registered.find(
-              (p): p is string =>
-                typeof p === "string" && matchesRoute(p, r.path),
-            )
-          : undefined;
+    if (!r.route) return routeFromStack(req);
+    const route = routeTemplate(r.route.path, r.path);
     if (route === undefined) return undefined;
 
     const base =
       typeof r.baseUrl === "string" && r.baseUrl !== ""
         ? templateMount(r.baseUrl, r.params, route)
         : "";
-    const full = base && route === "/" ? base : base + route;
-    return full.replace(/:(\w+)/g, "{$1}");
+    return toPattern(joinRoute(base, route));
   } catch {
     return undefined;
   }
+}
+
+/** The template a route registered with `registered` serves `path` under. */
+function routeTemplate(registered: unknown, path: unknown): string | undefined {
+  if (typeof registered === "string") return registered;
+  if (!Array.isArray(registered)) return undefined;
+  return registered.find(
+    (p): p is string => typeof p === "string" && matchesRoute(p, path),
+  );
+}
+
+function joinRoute(base: string, route: string): string {
+  return base && route === "/" ? base : base + route;
+}
+
+function toPattern(route: string): string {
+  return route.replace(/:(\w+)/g, "{$1}");
+}
+
+/**
+ * Express 4's `Layer` and Express 5's (the `router` package), reduced to
+ * what matching reads. Nothing here is written to: `layer.match()` would
+ * store its result on the shared layer, and it throws on a malformed escape.
+ */
+interface StackLayer {
+  route?: {
+    path?: unknown;
+    _handles_method?: (m: string) => boolean;
+    _handlesMethod?: (m: string) => boolean;
+  };
+  handle?: { stack?: unknown };
+  // Express 4
+  regexp?: RegExp & { fast_slash?: boolean; fast_star?: boolean };
+  keys?: { name: string | number }[];
+  // Express 5
+  slash?: boolean;
+  matchers?: ((p: string) => false | { path: string; params: object })[];
+}
+
+/**
+ * The route the app would have dispatched this request to, for a request
+ * answered before Express got there: auth's 401, a rate limiter's 429, a
+ * validation layer (RES-20). Without it those log under the concrete URL,
+ * IDs and all, so they miss their endpoint's error rate and sampling rule,
+ * and their recovery link says the endpoint isn't documented.
+ *
+ * Walks the app's router stack the way Express does, using the matchers it
+ * compiled (so `case sensitive routing` and `strict routing` carry over):
+ * into each mounted router whose prefix matches, to the first route that
+ * matches the rest of the path and handles the method. A mounted router's
+ * prefix is templated from that layer's own captures, so this needs no
+ * `mergeParams`. Sub-apps (`app.use(path, otherApp)`) aren't entered: their
+ * stack is not reachable from the layer.
+ */
+function routeFromStack(req: unknown): string | undefined {
+  const r = req as {
+    app?: { _router?: { stack?: unknown }; router?: { stack?: unknown } };
+    originalUrl?: unknown;
+    url?: unknown;
+    method?: unknown;
+  };
+  const app = r.app;
+  if (!app) return undefined;
+  // Express 4 keeps the router on `_router`; reading `app.router` there
+  // throws a deprecation error. Express 5 has only `app.router`.
+  const stack = ("_router" in app ? app._router : app.router)?.stack;
+  const url = typeof r.originalUrl === "string" ? r.originalUrl : r.url;
+  if (!Array.isArray(stack) || typeof url !== "string") return undefined;
+  const path = url.split("?")[0];
+  if (!path.startsWith("/")) return undefined;
+  const method = typeof r.method === "string" ? r.method : "GET";
+  const found = findRoute(stack, path, method, "");
+  return found ? toPattern(found) : undefined;
+}
+
+/**
+ * `undefined` keeps looking; `null` means a route matched but has no
+ * template (a RegExp path), which ends the search like a match would.
+ */
+function findRoute(
+  stack: StackLayer[],
+  path: string,
+  method: string,
+  base: string,
+): string | null | undefined {
+  for (const layer of stack) {
+    if (!layer || typeof layer !== "object") continue;
+    const route = layer.route;
+    if (route) {
+      const handles = route._handlesMethod ?? route._handles_method;
+      if (typeof handles !== "function" || !handles.call(route, method)) {
+        continue;
+      }
+      // An app's own RegExp is never run here. Express only reaches it for a
+      // request that got through the middleware, and this lookup is for one
+      // that didn't (an unauthenticated 401), so running it would expose a
+      // backtracking-prone pattern to traffic it never saw before. It has no
+      // template to report either way. The cost: a later string route that
+      // also matches is reported when the RegExp route would have served it.
+      if (hasRegExp(route.path)) continue;
+      if (!matchLayer(layer, path)) continue;
+      const template = routeTemplate(route.path, path);
+      return template === undefined ? null : joinRoute(base, template);
+    }
+    const inner = layer.handle?.stack;
+    if (!Array.isArray(inner)) continue;
+    const m = matchLayer(layer, path);
+    if (!m) continue;
+    // Express only enters a router whose prefix ends on a segment boundary.
+    const next = path[m.path.length];
+    if (next !== undefined && next !== "/") continue;
+    const rest = path.slice(m.path.length) || "/";
+    // Express would enter this router, so a mount that can't be templated
+    // ends the search with no pattern rather than a concrete one.
+    const mount = templateCaptures(m.path, m.params);
+    if (mount === undefined) return null;
+    const found = findRoute(inner, rest, method, base + mount.replace(/\/+$/, ""));
+    if (found !== undefined) return found;
+  }
+  return undefined;
+}
+
+function hasRegExp(registered: unknown): boolean {
+  return Array.isArray(registered)
+    ? registered.some((p) => p instanceof RegExp)
+    : registered instanceof RegExp;
+}
+
+/**
+ * A mount prefix with each param it captured put back as `:name`, or
+ * undefined when one can't be: a single-segment value it can't place, a
+ * wildcard spanning segments, or an unnamed RegExp group. Unlike
+ * `templateMount`, which leaves those concrete, this has the layer's exact
+ * captures, so any value left over would be a concrete ID in the pattern.
+ */
+function templateCaptures(
+  prefix: string,
+  params: Record<string, unknown>,
+): string | undefined {
+  const segs = prefix.split("/");
+  const decoded = segs.map((seg) => {
+    try {
+      return decodeURIComponent(seg);
+    } catch {
+      return seg;
+    }
+  });
+  const claimed = new Set<number>();
+  for (const [name, value] of Object.entries(params)) {
+    if (value === undefined) continue; // optional param that didn't match
+    if (/^\d+$/.test(name) || typeof value !== "string" || value === "") {
+      return undefined;
+    }
+    const i = decoded.findIndex((d, j) => d === value && !claimed.has(j));
+    if (i === -1) return undefined;
+    claimed.add(i);
+    segs[i] = `:${name}`;
+  }
+  return segs.join("/");
+}
+
+/** `layer.match()` without its side effects, for both Express majors. */
+function matchLayer(
+  layer: StackLayer,
+  path: string,
+): { path: string; params: Record<string, string> } | undefined {
+  if (Array.isArray(layer.matchers)) {
+    if (layer.slash) return { path: "", params: {} };
+    for (const matcher of layer.matchers) {
+      try {
+        const m = matcher(path);
+        if (m) return { path: m.path, params: m.params as Record<string, string> };
+      } catch {
+        /* malformed escape: Express would answer 400, not route it */
+      }
+    }
+    return undefined;
+  }
+  const re = layer.regexp;
+  if (!(re instanceof RegExp)) return undefined;
+  if (re.fast_slash) return { path: "", params: {} };
+  if (re.fast_star) return { path, params: {} };
+  const m = re.exec(path);
+  if (!m) return undefined;
+  const params: Record<string, string> = {};
+  const keys = layer.keys ?? [];
+  for (let i = 1; i < m.length; i++) {
+    if (m[i] === undefined || !keys[i - 1]) continue;
+    try {
+      params[keys[i - 1].name] = decodeURIComponent(m[i]);
+    } catch {
+      return undefined; // malformed escape: Express would answer 400
+    }
+  }
+  return { path: m[0], params };
 }
 
 /**

@@ -1447,7 +1447,12 @@ document its own choices; none of it is compared for conformance.
   SHOULD report no pattern rather than pass a concrete path off as a
   template. A concrete path still carrying an id reads as a paramless route
   under FP-014, which sends every 404 to the `endpoint` bucket and its
-  opposite advice.
+  opposite advice. A request answered before routing (auth's 401, a rate
+  limiter's 429) never reaches the router attribute, so an adapter that can
+  read the app's route table SHOULD report the route the request would have
+  reached (Node walks Express's router stack, and takes Hono's from its
+  matched routes), and SHOULD NOT report the pattern of the middleware that
+  answered it.
 - **Stack frame parsing and skip lists** (FP-044).
 - **Test-runner detection** (BATCH-008). Node keys on `NODE_ENV=test`,
   `VITEST`, `JEST_WORKER_ID`, `NODE_TEST_CONTEXT`, `AVA_PATH`. Python would
