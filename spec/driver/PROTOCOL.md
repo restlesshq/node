@@ -115,6 +115,13 @@ verified by each SDK's own unit tests, not by vectors.
 `CapturedRequest` is `{requestId, startedAt, duration, routePattern?,
 request: {method, url, headers, body?}, response: {status, headers, body?}}`.
 
+| op | input | result |
+|---|---|---|
+| `requestScheme` | `{headers: Record<string, string>, encrypted: boolean}` | `"http"\|"https"` |
+
+`requestScheme` is the scheme of the logged `request.url` (CONTRACT.md
+HAR-013). `encrypted` is whether the transport was TLS.
+
 ### Sampling
 
 | op | input | result |

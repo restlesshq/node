@@ -39,6 +39,7 @@ import {
   buildDebugInjection,
   recoverySlug,
   requestIdResponseHeaders,
+  requestScheme,
 } from "../src/adapters/_shared.js";
 import {
   normalizeSampling,
@@ -122,6 +123,7 @@ export const OPS: Record<string, (input: Input) => unknown> = {
 
   // --- HAR ---
   harEntry: (i) => toHarEntry(i.captured as CapturedRequest),
+  requestScheme: (i) => requestScheme(i.headers ?? {}, !!i.encrypted),
 
   // --- sampling ---
   // Routes come back as sorted [key, mode] pairs so the comparison pins

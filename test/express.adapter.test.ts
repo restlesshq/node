@@ -984,3 +984,28 @@ describe("route patterns", () => {
     });
   });
 });
+
+describe("logged URL scheme behind a TLS-terminating proxy (RES-21)", () => {
+  beforeEach(() => _resetSettingsCache());
+
+  async function loggedUrl(headers?: Record<string, string>): Promise<string> {
+    const { uploads, fetchImpl } = bodyCollector();
+    const client = restlessExpress("rdme_test", { baseUrl: "http://localhost:3003", fetch: fetchImpl });
+    const mw = client.setup(() => ({}));
+    await run(mw, (_req, res) => res.end("{}"), { method: "GET", path: "/v1/ping?x=1", headers });
+    await client.flush();
+    return uploads[0].request.log.entries[0].request.url;
+  }
+
+  it("logs https when the proxy sends x-forwarded-proto: https", async () => {
+    expect(await loggedUrl({ "x-forwarded-proto": "https" })).toMatch(/^https:\/\/127\.0\.0\.1:\d+\/v1\/ping\?x=1$/);
+  });
+
+  it("logs https from Forwarded: proto=https", async () => {
+    expect(await loggedUrl({ forwarded: "for=192.0.2.60;proto=https" })).toMatch(/^https:\/\//);
+  });
+
+  it("still logs http for a plain request with no forwarding headers", async () => {
+    expect(await loggedUrl()).toMatch(/^http:\/\//);
+  });
+});

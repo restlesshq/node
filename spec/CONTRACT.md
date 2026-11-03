@@ -1,6 +1,6 @@
 # Restless SDK Contract
 
-**Spec version:** 1.3.0
+**Spec version:** 1.4.0
 **Status:** Draft
 **Reference implementation:** `@restlessai/sdk` (this repository)
 
@@ -821,7 +821,29 @@ captured.
 **HAR-012** (MUST) `headersSize` is `-1` on both request and response.
 (Not computed; HAR permits `-1` for unknown.)
 
-Vectors: `spec/vectors/har.json`.
+**HAR-013** (MUST) The scheme of `request.url` is the one the client used,
+not the one the app's socket saw. A TLS-terminating proxy (Render, Heroku,
+an AWS ALB, Cloudflare, nginx) hands the app plain HTTP, so reading the
+socket alone logs every production request as `http://`. Take the first
+of these that yields `http` or `https`:
+
+1. `Forwarded` (RFC 7239): the `proto` parameter of the **first** element
+   (the text before the first `,`). Parameter names are case-insensitive;
+   the value may be quoted.
+2. `X-Forwarded-Proto`: the **first** comma-separated value.
+3. The transport: `https` when the connection is TLS, else `http`.
+
+Header values are trimmed and lowercased before the check. A header value
+that is not `http` or `https` (`wss`, `""`, garbage) is ignored and the
+next source is tried. Header names are case-insensitive. A repeated header
+counts as its first occurrence.
+
+The headers are trusted without a trusted-proxy list. A client that spoofs
+them only mislabels its own log entry; the SDK makes no security decision
+on the value. Only the scheme is derived this way: the host is still the
+request's `Host`.
+
+Vectors: `spec/vectors/har.json`, `spec/vectors/request-scheme.json`.
 
 ---
 
@@ -1521,6 +1543,12 @@ lifted the status gate on two headers, which is observable, but no SDK
 option, no method signature and no wire field moved.
 
 ### 16.1 Changelog
+
+- **1.4.0** - HAR-013: the logged URL's scheme honours `Forwarded: proto=`
+  and `X-Forwarded-Proto` before the socket, so an app behind a
+  TLS-terminating proxy no longer logs `http://`. Minor under CHANGE-005:
+  it adds a requirement and the `requestScheme` driver op; no option,
+  method or wire field moves.
 
 - **1.3.0** - Upload backpressure. WIRE-024 now allows the retries in
   WIRE-026 (retry `503`/`429`, honouring `Retry-After`, at most 2 times);

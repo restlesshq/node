@@ -9,6 +9,7 @@ import {
   resolveBlock,
   recordThrown,
   errorStatus,
+  requestScheme,
   type SetupHandle,
 } from "./_shared.js";
 import {
@@ -31,7 +32,11 @@ function koaMiddleware(handle: SetupHandle) {
     for (const [k, v] of Object.entries(ctx.request.headers)) {
       if (v) reqHeaders[k] = Array.isArray(v) ? v.join(", ") : String(v);
     }
-    const fullUrl = `${ctx.protocol}://${ctx.host}${ctx.originalUrl || ctx.url}`;
+    // `ctx.protocol` is "https" for a TLS socket, or (with `app.proxy`) the
+    // forwarded proto, so it stands in for the socket check HAR-013 falls
+    // back to.
+    const protocol = requestScheme(ctx.request.headers, ctx.protocol === "https");
+    const fullUrl = `${protocol}://${ctx.host}${ctx.originalUrl || ctx.url}`;
 
     // Pass the native Koa ctx through — users can access ctx.state,
     // ctx.request.body, etc.
