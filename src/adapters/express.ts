@@ -17,6 +17,7 @@ import {
   errorStatus,
   captureStateOf,
   errorHandler,
+  requestScheme,
   CAPTURE_STATE,
   type CaptureState,
   type SetupHandle,
@@ -148,10 +149,10 @@ function expressMiddleware(handle: SetupHandle) {
       if (v) reqHeaders[k] = Array.isArray(v) ? v.join(", ") : String(v);
     }
 
-    const protocol = (req.socket as { encrypted?: boolean } | undefined)
-      ?.encrypted
-      ? "https"
-      : "http";
+    const protocol = requestScheme(
+      req.headers,
+      !!(req.socket as { encrypted?: boolean } | undefined)?.encrypted,
+    );
     const host = req.headers.host || "localhost";
     const fullUrl = `${protocol}://${host}${req.url || "/"}`;
 

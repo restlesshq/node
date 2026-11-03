@@ -678,6 +678,38 @@ export const SAMPLING_CASES: CaseDef[] = [
     note: "Different spelling, same normalized config: must hash identically to sampling/hash-routes-only." },
 ];
 
+// ---------------------------------------------------------------------------
+// request scheme
+// ---------------------------------------------------------------------------
+
+const rs = (id: string, headers: Record<string, string>, encrypted: boolean, note?: string): CaseDef =>
+  ({ id: `scheme/${id}`, requirement: "HAR-013", op: "requestScheme", input: { headers, encrypted }, ...(note ? { note } : {}) });
+
+export const REQUEST_SCHEME_CASES: CaseDef[] = [
+  rs("plain-socket", {}, false),
+  rs("tls-socket", {}, true),
+  rs("xfp-https", { "x-forwarded-proto": "https" }, false,
+    "The RES-21 case: Render terminates TLS and forwards plain HTTP."),
+  rs("xfp-http-over-tls", { "x-forwarded-proto": "http" }, true,
+    "The header wins over the socket in both directions."),
+  rs("xfp-first-of-chain", { "x-forwarded-proto": "https, http" }, false,
+    "Two proxies: the first value is the client-facing hop."),
+  rs("xfp-case-and-space", { "x-forwarded-proto": "  HTTPS " }, false),
+  rs("xfp-invalid-falls-back", { "x-forwarded-proto": "wss" }, true),
+  rs("xfp-empty-falls-back", { "x-forwarded-proto": "" }, true),
+  rs("xfp-header-name-case", { "X-Forwarded-Proto": "https" }, false),
+  rs("forwarded-proto", { forwarded: "for=192.0.2.60;proto=https;by=203.0.113.43" }, false),
+  rs("forwarded-quoted", { forwarded: 'proto="https"' }, false),
+  rs("forwarded-param-case", { forwarded: "Proto=HTTPS" }, false),
+  rs("forwarded-first-element", { forwarded: "proto=https, proto=http" }, false),
+  rs("forwarded-beats-xfp", { forwarded: "proto=https", "x-forwarded-proto": "http" }, false),
+  rs("forwarded-without-proto", { forwarded: "for=192.0.2.60", "x-forwarded-proto": "https" }, false,
+    "No proto in Forwarded: fall through to X-Forwarded-Proto."),
+  rs("forwarded-proto-only-later-hop", { forwarded: "for=a, proto=https" }, false,
+    "Only the first element counts, so this falls through to the socket."),
+  rs("forwarded-invalid-proto", { forwarded: "proto=ftp", "x-forwarded-proto": "https" }, false),
+];
+
 export const ALL_FILES: Array<{ file: string; cases: CaseDef[] }> = [
   { file: "mask.json", cases: MASK_CASES },
   { file: "redact.json", cases: REDACT_CASES },
@@ -686,5 +718,6 @@ export const ALL_FILES: Array<{ file: string; cases: CaseDef[] }> = [
   { file: "recovery-slug.json", cases: RECOVERY_SLUG_CASES },
   { file: "debug-injection.json", cases: INJECTION_CASES },
   { file: "har.json", cases: HAR_CASES },
+  { file: "request-scheme.json", cases: REQUEST_SCHEME_CASES },
   { file: "sampling.json", cases: SAMPLING_CASES },
 ];

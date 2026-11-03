@@ -9,6 +9,7 @@ import {
   lookupErrorRecovery,
   resolveBlock,
   errorStack,
+  requestScheme,
   type SetupHandle,
 } from "./_shared.js";
 import {
@@ -65,7 +66,7 @@ async function restlessFastifyPlugin(fastify: any, handle: SetupHandle) {
     for (const [k, v] of Object.entries(req.headers)) {
       if (v) reqHeaders[k] = Array.isArray(v) ? v.join(", ") : String(v);
     }
-    const protocol = req.raw.socket?.encrypted ? "https" : "http";
+    const protocol = requestScheme(req.headers, !!req.raw.socket?.encrypted);
     const host = req.headers.host || "localhost";
     const fullUrl = `${protocol}://${host}${req.raw.url || "/"}`;
 

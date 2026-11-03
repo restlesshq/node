@@ -163,6 +163,52 @@ export function recoverySlug(method?: string, path?: string): string {
   return flat ? `${m}-${flat}` : m;
 }
 
+type HeaderBag = Record<string, string | string[] | undefined>;
+
+function headerValue(headers: HeaderBag, name: string): string | undefined {
+  for (const [k, v] of Object.entries(headers)) {
+    if (k.toLowerCase() !== name) continue;
+    const s = Array.isArray(v) ? v[0] : v;
+    if (s) return s;
+  }
+  return undefined;
+}
+
+function validScheme(raw: string | undefined): "http" | "https" | undefined {
+  const s = raw?.trim().replace(/^"(.*)"$/, "$1").toLowerCase();
+  return s === "http" || s === "https" ? s : undefined;
+}
+
+/**
+ * The scheme the client used, for the logged URL (CONTRACT.md HAR-013).
+ *
+ * A TLS-terminating proxy (Render, Heroku, an ALB, nginx) hands the app a
+ * plain-HTTP socket, so the socket alone logs every request as `http://`.
+ * The first hop's `Forwarded: proto=` wins, then the first
+ * `X-Forwarded-Proto` value, then the socket. Only `http` and `https` are
+ * accepted from a header; anything else falls through to the next source.
+ * The headers are trusted without a trusted-proxy list: a spoofed value
+ * only mislabels the sender's own log entry.
+ */
+export function requestScheme(
+  headers: HeaderBag,
+  encrypted: boolean,
+): "http" | "https" {
+  const forwarded = headerValue(headers, "forwarded");
+  if (forwarded) {
+    const firstHop = forwarded.split(",")[0];
+    for (const pair of firstHop.split(";")) {
+      const eq = pair.indexOf("=");
+      if (eq === -1 || pair.slice(0, eq).trim().toLowerCase() !== "proto") continue;
+      const scheme = validScheme(pair.slice(eq + 1));
+      if (scheme) return scheme;
+    }
+  }
+  const xfp = validScheme(headerValue(headers, "x-forwarded-proto")?.split(",")[0]);
+  if (xfp) return xfp;
+  return encrypted ? "https" : "http";
+}
+
 /**
  * Apply the SDK's internal response-body modifications. Currently this is
  * only the debug object injection on 4xx/5xx JSON responses.
